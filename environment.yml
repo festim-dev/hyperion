@@ -1,0 +1,9 @@
+name: festim-hyperion
+
+channels:
+  - conda-forge
+
+dependencies:
+  - festim
+  - python-gmsh
+  - pyvista
