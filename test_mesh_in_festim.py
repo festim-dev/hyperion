@@ -61,9 +61,20 @@ mesh, cell_tags, facet_tags = gmshio.read_from_msh(
 from dolfinx import plot
 import pyvista
 
+fdim = mesh.topology.dim - 1
 tdim = mesh.topology.dim
+mesh.topology.create_connectivity(fdim, tdim)
+topology, cell_types, x = plot.vtk_mesh(mesh, fdim, facet_tags.indices)
 
-mesh.topology.create_connectivity(tdim, tdim)
+p = pyvista.Plotter()
+grid = pyvista.UnstructuredGrid(topology, cell_types, x)
+grid.cell_data["Facet Marker"] = facet_tags.values
+grid.set_active_scalars("Facet Marker")
+p.add_mesh(grid, show_edges=True)
+if pyvista.OFF_SCREEN:
+    figure = p.screenshot("facet_marker.png")
+p.show()
+
 
 topology, cell_types, x = plot.vtk_mesh(mesh, tdim, cell_tags.indices)
 p = pyvista.Plotter()
