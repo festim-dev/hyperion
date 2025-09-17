@@ -18,8 +18,9 @@ import festim as F
 
 D_solid, D_liquid = 2.0, 2.0
 K_solid, K_liquid = 3.0, 6.0
-mat_solid  = F.Material(D_0=D_solid,  E_D=0.0, K_S_0=K_solid,  E_K_S=0.0, solubility_law="sieverts")
-mat_liquid = F.Material(D_0=D_liquid, E_D=0.0, K_S_0=K_liquid, E_K_S=0.0, solubility_law="sieverts")
+E_K_S_solid, E_K_S_liquid = 0.0, 0.0
+mat_solid  = F.Material(D_0=D_solid,  E_D=0.0, K_S_0=K_solid,  E_K_S=E_K_S_solid, solubility_law="sievert")
+mat_liquid = F.Material(D_0=D_liquid, E_D=0.0, K_S_0=K_liquid, E_K_S=E_K_S_liquid, solubility_law="henry")
 
 fluid_volume = F.VolumeSubdomain(id=1, material=mat_liquid)
 solid_volume = F.VolumeSubdomain(id=2, material=mat_solid)
@@ -51,8 +52,8 @@ my_model.subdomains = [solid_volume, fluid_volume, out_surf,
                        Liquid_top, mem_Ni_bottom, bottom_Ni_top,
                        liquid_solid_interface]
 
-my_model.method_interface = "nietsche"
-interface = F.Interface(id=99, subdomains=[solid_volume, fluid_volume], penalty_term=100)
+my_model.method_interface = "penalty"
+interface = F.Interface(id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e6)
 
 my_model.interfaces = [interface]
 
@@ -87,8 +88,10 @@ out_surface_bc = F.FixedConcentrationBC(
     subdomain=out_surf, species=H, value=0.0
 )
 
+P_up = 1e5  # Pa
+
 my_model.boundary_conditions = [
-    F.FixedConcentrationBC(subdomain=s, species=H, value=1.0)
+   F.SievertsBC(subdomain=s, species=H, pressure=P_up, S_0=K_solid, E_S=0.000001)   ###NOTE: E_s can not be 0?
     for s in upstream_volume_surfaces
 ] + [out_surface_bc] + [
     F.FixedConcentrationBC(subdomain=s, species=H, value=0.0)
