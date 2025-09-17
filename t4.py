@@ -39,7 +39,7 @@ liquid_solid_interface = F.SurfaceSubdomain(id=99)
 
 my_model = F.HydrogenTransportProblemDiscontinuous()
 
-my_model.mesh = F.Mesh(mesh)
+my_model.mesh = F.Mesh(mesh, coordinate_system="cylindrical")
 
 # we need to pass the meshtags to the model directly
 my_model.facet_meshtags = facet_tags
