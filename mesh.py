@@ -49,8 +49,49 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
 
     # mark boundaries
     print(gmsh.model.getEntities(1))
-    bottom = gmsh.model.addPhysicalGroup(1, [4], tag=3)
-    gmsh.model.setPhysicalName(1, bottom, "bottom")
+    out = gmsh.model.addPhysicalGroup(1, [5, 6, 7], tag=3)
+    gmsh.model.setPhysicalName(1, out, "out")
+
+    left_bc_liquid = gmsh.model.addPhysicalGroup(1, [4], tag=41)
+    gmsh.model.setPhysicalName(1, left_bc_liquid, "left_bc_liquid")
+
+    left_bc_top_Ni = gmsh.model.addPhysicalGroup(1, [8], tag=42)
+    gmsh.model.setPhysicalName(1, left_bc_top_Ni, "left_bc_top_Ni")
+
+    left_bc_middle_Ni = gmsh.model.addPhysicalGroup(1, [11], tag=43)
+    gmsh.model.setPhysicalName(1, left_bc_middle_Ni, "left_bc_middle_Ni")
+
+    left_bc_bottom_Ni = gmsh.model.addPhysicalGroup(1, [15], tag=44)
+    gmsh.model.setPhysicalName(1, left_bc_bottom_Ni, "left_bc_bottom_Ni")
+
+
+    top_Ni_bottom = gmsh.model.addPhysicalGroup(1, [9], tag=5)
+    gmsh.model.setPhysicalName(1, top_Ni_bottom, "top_Ni_bottom")
+
+    Ds_Ni_left = gmsh.model.addPhysicalGroup(1, [10], tag=6)
+    gmsh.model.setPhysicalName(1, Ds_Ni_left, "Ds_Ni_left")
+
+    Up_Ni_left = gmsh.model.addPhysicalGroup(1, [13], tag=7)
+    gmsh.model.setPhysicalName(1, Up_Ni_left, "Up_Ni_left")
+
+    Liquid_top = gmsh.model.addPhysicalGroup(1, [3], tag=8)
+    gmsh.model.setPhysicalName(1, Liquid_top, "Liquid_top")    
+
+    mem_Ni_bottom = gmsh.model.addPhysicalGroup(1, [12], tag=9)
+    gmsh.model.setPhysicalName(1, mem_Ni_bottom, "mem_Ni_bottom")    
+
+    bottom_Ni_top = gmsh.model.addPhysicalGroup(1, [14], tag=10)
+    gmsh.model.setPhysicalName(1, bottom_Ni_top, "bottom_Ni_top")
+
+
+    boundary_Liquid = set(gmsh.model.getBoundary([(2, 5)], oriented=False, recursive=False))
+    boundary_solid = set(gmsh.model.getBoundary([(2, 10)], oriented=False, recursive=False))
+    
+    interface_curves = list(boundary_Liquid.intersection(boundary_solid))
+
+    curve_tags = [c[1] for c in interface_curves]  # [1, 2]
+    liquid_Ni_interface = gmsh.model.addPhysicalGroup(1, curve_tags, tag=99)
+    gmsh.model.setPhysicalName(1, liquid_Ni_interface, "liquid_Ni_interface")
 
     # set CharacteristicLengthMax
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_size)
@@ -66,4 +107,6 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
 
 
 if __name__ == "__main__":
+    generate_mesh()
     gmsh.fltk.run()
+
