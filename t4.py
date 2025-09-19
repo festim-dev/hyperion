@@ -75,8 +75,8 @@ my_model.subdomains = [solid_volume, fluid_volume, out_surf,
                        Liquid_top, mem_Ni_bottom, bottom_Ni_top,
                        liquid_solid_interface]
 
-my_model.method_interface = "nietsche"
-interface = F.Interface(id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e20)
+my_model.method_interface = "penalty"
+interface = F.Interface(id=99, subdomains=[solid_volume, fluid_volume], penalty_term=10)
 
 my_model.interfaces = [interface]
 
@@ -120,7 +120,7 @@ my_model.boundary_conditions = [
     F.FixedConcentrationBC(subdomain=s, species=H, value=0.0)
     for s in downstream_volume_surfaces]
 
-my_model.settings = F.Settings(atol=1e-10, rtol=1e-10, transient=False)
+my_model.settings = F.Settings(atol=1e-10, rtol=1e-6, transient=False)
 
 
 
@@ -186,7 +186,16 @@ my_model.exports = [
     F.VTXSpeciesExport(field=H, filename="out-species_fluid.bp", subdomain=fluid_volume),
 ]#+ [flux_in, flux_out]
 
+from dolfinx.log import set_log_level, LogLevel
+
+set_log_level(LogLevel.INFO)
+
 my_model.initialise()
+
+# add a non-zero initial guess for the solution
+for domain in my_model.volume_subdomains:
+    species_idx = 0  # only one species
+    domain.u.sub(species_idx).x.array[:] = 1e21
 my_model.run()
 
 # print(f"In flux: {flux_in.value}")
@@ -226,3 +235,18 @@ my_model.run()
 # if pyvista.OFF_SCREEN:
 #     figure = p.screenshot("cell_marker.png")
 # p.show()
+
+
+# c_ni = 2.1e25
+# c_flibe = 1.32e25
+
+c_flibe = 1.9e23
+c_ni = 9.8e20
+
+K_s_ni = solubilities_nickel[0].value(my_model.temperature)   # particle m^-3 Pa^-0.5
+K_s_flibe = solubilities_flibe[0].value(my_model.temperature)  # particle m^-3 Pa^-1
+
+expected_c_flibe = (c_ni / K_s_ni)**2 * K_s_flibe 
+
+print("Expected concentration in FLiBe (particle/m^3): ", expected_c_flibe)
+print("Real concentration in FLiBe (particle/m^3): ", c_flibe)

@@ -1,9 +1,14 @@
-name: festim-hyperion
+name: festim-hyperion-with-festim-dev
 
 channels:
   - conda-forge
 
 dependencies:
-  - festim
+  # - festim
+  - fenics-dolfinx
+  - scifem
   - python-gmsh
   - pyvista
+  - pip
+  - pip:
+      - git+https://github.com/festim-dev/FESTIM@fix-penalty
