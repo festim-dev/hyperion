@@ -6,9 +6,11 @@ channels:
 dependencies:
   # - festim
   - fenics-dolfinx
+  - adios4dolfinx
   - scifem
   - python-gmsh
   - pyvista
   - pip
   - pip:
       - git+https://github.com/festim-dev/FESTIM@fix-penalty
+      - h_transport_materials
