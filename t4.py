@@ -75,8 +75,8 @@ my_model.subdomains = [solid_volume, fluid_volume, out_surf,
                        Liquid_top, mem_Ni_bottom, bottom_Ni_top,
                        liquid_solid_interface]
 
-my_model.method_interface = "nietsche"
-interface = F.Interface(id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e20)
+my_model.method_interface = "penalty"
+interface = F.Interface(id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e28)
 
 my_model.interfaces = [interface]
 
@@ -228,8 +228,8 @@ my_model.run()
 # p.show()
 
 # replace this based on what we see in paraview
-c_flibe = 4.7e22
-c_ni = 2.3e25
+c_flibe = 1.32e25
+c_ni = 2.17e25
 
 K_s_ni = solubilities_nickel[0].value(my_model.temperature)   # particle m^-3 Pa^-0.5
 K_s_flibe = solubilities_flibe[0].value(my_model.temperature)  # particle m^-3 Pa^-1
