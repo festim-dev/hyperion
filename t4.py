@@ -154,9 +154,13 @@ my_model.settings = F.Settings(atol=1e-10, rtol=1e-10, transient=False)
 
 from cylindrical_flux import CylindricalFlux
 
-flux_in = CylindricalFlux(field=H, surface=upstream_volume_surfaces)
-downstream_fluxes = [CylindricalFlux(field=H, surface=downstream_volume_surfaces)]
-# flux_out_2 = CylindricalFlux(field=H, surface=out_surf)
+fluxes_in = [
+    CylindricalFlux(field=H, surface=surf) for surf in upstream_volume_surfaces
+]
+downstream_fluxes = [
+    CylindricalFlux(field=H, surface=surf) for surf in downstream_volume_surfaces
+]
+glovebox_flux = CylindricalFlux(field=H, surface=out_surf)
 
 my_model.exports = [
     F.VTXSpeciesExport(
@@ -165,48 +169,22 @@ my_model.exports = [
     F.VTXSpeciesExport(
         field=H, filename="out-species_fluid.bp", subdomain=fluid_volume
     ),
-]  # + [flux_in, flux_out]
+]
+my_model.exports += downstream_fluxes
+my_model.exports += fluxes_in
+my_model.exports += [glovebox_flux]
 
 my_model.initialise()
 my_model.run()
 
-# print(f"In flux: {flux_in.value}")
-# print(f"Out flux: {flux_out.value}")
 
-# # from dolfinx.io import XDMFFile
+total_flux_glovebox = glovebox_flux.value
+total_downstream_flux = sum(flux.value for flux in downstream_fluxes)
+total_flux_in = sum(flux.value for flux in fluxes_in)
 
-# # with XDMFFile(MPI.COMM_WORLD, "mesh.xdmf", "w") as xdmf:
-# #     xdmf.write_mesh(mesh)
-# #     xdmf.write_meshtags(cell_tags, mesh.geometry)
-# # #exit()
-
-# from dolfinx import plot
-# import pyvista
-
-# # fdim = mesh.topology.dim - 1
-# # tdim = mesh.topology.dim
-# # mesh.topology.create_connectivity(fdim, tdim)
-# # topology, cell_types, x = plot.vtk_mesh(mesh, fdim, facet_tags.indices)
-
-# # p = pyvista.Plotter()
-# # grid = pyvista.UnstructuredGrid(topology, cell_types, x)
-# # grid.cell_data["Facet Marker"] = facet_tags.values
-# # grid.set_active_scalars("Facet Marker")
-# # p.add_mesh(grid, show_edges=True)
-# # if pyvista.OFF_SCREEN:
-# #     figure = p.screenshot("facet_marker.png")
-# # p.show()
-
-
-# topology, cell_types, x = plot.vtk_mesh(mesh, tdim, cell_tags.indices)
-# p = pyvista.Plotter()
-# grid = pyvista.UnstructuredGrid(topology, cell_types, x)
-# grid.cell_data["Cell Marker"] = cell_tags.values
-# grid.set_active_scalars("Cell Marker")
-# p.add_mesh(grid, show_edges=False)
-# if pyvista.OFF_SCREEN:
-#     figure = p.screenshot("cell_marker.png")
-# p.show()
+print(f"Flux in: {total_flux_in:.2e} H/s")
+print(f"Total downstream flux: {total_downstream_flux:.2e} H/s")
+print(f"Flux out (glovebox): {total_flux_glovebox:.2e} H/s")
 
 # replace this based on what we see in paraview
 c_flibe = 1.32e25
