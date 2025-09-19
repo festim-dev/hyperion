@@ -226,3 +226,15 @@ my_model.run()
 # if pyvista.OFF_SCREEN:
 #     figure = p.screenshot("cell_marker.png")
 # p.show()
+
+# replace this based on what we see in paraview
+c_flibe = 4.7e22
+c_ni = 2.3e25
+
+K_s_ni = solubilities_nickel[0].value(my_model.temperature)   # particle m^-3 Pa^-0.5
+K_s_flibe = solubilities_flibe[0].value(my_model.temperature)  # particle m^-3 Pa^-1
+
+expected_c_flibe = (c_ni / K_s_ni)**2 * K_s_flibe 
+
+print("Expected concentration in FLiBe (particle/m^3): ", expected_c_flibe)
+print("Real concentration in FLiBe (particle/m^3): ", c_flibe)
