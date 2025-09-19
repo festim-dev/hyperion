@@ -4,6 +4,11 @@ channels:
   - conda-forge
 
 dependencies:
-  - festim
+  # - festim
+  - fenics-dolfinx
+  - scifem
   - python-gmsh
   - pyvista
+  - pip
+  - pip:
+      - git+https://github.com/festim-dev/FESTIM@fix-penalty
