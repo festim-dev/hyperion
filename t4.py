@@ -1,5 +1,6 @@
 from mesh import generate_mesh
-
+from dolfinx.log import set_log_level, LogLevel
+set_log_level(LogLevel.INFO)
 
 generate_mesh(mesh_size=2e-4)
 
@@ -16,11 +17,32 @@ mesh, cell_tags, facet_tags = gmshio.read_from_msh(
 import festim as F
 # print(F.__version__)
 
-D_solid, D_liquid = 2.0, 2.0
-K_solid, K_liquid = 3.0, 6.0
-E_K_S_solid, E_K_S_liquid = 0.0, 0.0
-mat_solid  = F.Material(D_0=D_solid,  E_D=0.0, K_S_0=K_solid,  E_K_S=E_K_S_solid, solubility_law="sievert")
-mat_liquid = F.Material(D_0=D_liquid, E_D=0.0, K_S_0=K_liquid, E_K_S=E_K_S_liquid, solubility_law="henry")
+
+import h_transport_materials as htm
+
+#filter nickel and H
+diffusivities_nickel= htm.diffusivities.filter(material="nickel").filter(isotope="h")
+solubilities_nickel = htm.solubilities.filter(material="nickel").filter(isotope="h")
+
+#material parameters for Nickel
+D_solid= diffusivities_nickel[0].pre_exp.magnitude           #m^2/s
+E_D_solid= diffusivities_nickel[0].act_energy.magnitude      #ev/particle
+K_solid= solubilities_nickel[0].pre_exp.magnitude            #particle m^-3 Pa^-0.5
+E_K_S_solid = solubilities_nickel[0].act_energy.magnitude    #ev/particle
+
+#material parameters for FLiBe
+diffusivities_flibe= htm.diffusivities.filter(material="flibe").filter(isotope="h")
+solubilities_flibe = htm.solubilities.filter(material="flibe").filter(isotope="h")
+
+D_liquid = diffusivities_flibe[0].pre_exp.magnitude           #m^2/s
+E_D_liquid = diffusivities_flibe[0].act_energy.magnitude      #ev/particle
+K_liquid = solubilities_flibe[0].pre_exp.magnitude            #particle m^-3 Pa^-1
+E_K_S_liquid = solubilities_flibe[0].act_energy.magnitude     #ev/particle. NOTE: This is a negative value?
+
+# Define materials
+
+mat_solid  = F.Material(D_0=D_solid,  E_D=E_D_solid, K_S_0=K_solid,  E_K_S=E_K_S_solid, solubility_law="sievert")
+mat_liquid = F.Material(D_0=D_liquid, E_D=E_D_liquid, K_S_0=K_liquid, E_K_S=E_K_S_liquid, solubility_law="henry")
 
 fluid_volume = F.VolumeSubdomain(id=1, material=mat_liquid)
 solid_volume = F.VolumeSubdomain(id=2, material=mat_solid)
@@ -38,6 +60,7 @@ mem_Ni_bottom = F.SurfaceSubdomain(id=9)
 bottom_Ni_top = F.SurfaceSubdomain(id=10)
 liquid_solid_interface = F.SurfaceSubdomain(id=99)
 
+
 my_model = F.HydrogenTransportProblemDiscontinuous()
 
 my_model.mesh = F.Mesh(mesh, coordinate_system="cylindrical")
@@ -52,8 +75,8 @@ my_model.subdomains = [solid_volume, fluid_volume, out_surf,
                        Liquid_top, mem_Ni_bottom, bottom_Ni_top,
                        liquid_solid_interface]
 
-my_model.method_interface = "penalty"
-interface = F.Interface(id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e6)
+my_model.method_interface = "nietsche"
+interface = F.Interface(id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e20)
 
 my_model.interfaces = [interface]
 
@@ -91,7 +114,7 @@ out_surface_bc = F.FixedConcentrationBC(
 P_up = 1e5  # Pa
 
 my_model.boundary_conditions = [
-   F.SievertsBC(subdomain=s, species=H, pressure=P_up, S_0=K_solid, E_S=0.000001)   ###NOTE: E_s can not be 0?
+   F.SievertsBC(subdomain=s, species=H, pressure=P_up, S_0=K_solid, E_S=E_K_S_solid)   ###NOTE: E_s can not be 0.
     for s in upstream_volume_surfaces
 ] + [out_surface_bc] + [
     F.FixedConcentrationBC(subdomain=s, species=H, value=0.0)
@@ -99,15 +122,75 @@ my_model.boundary_conditions = [
 
 my_model.settings = F.Settings(atol=1e-10, rtol=1e-10, transient=False)
 
+
+
+
+# import ufl
+# import numpy as np
+# import dolfinx
+# from mpi4py import MPI
+# # here we define our own SurfaceFlux class that takes into account the cylindrical coordinate system
+
+
+# class CylindricalFlux(F.SurfaceFlux):
+#     azimuth_range: tuple[float, float] = (0.0, 2 * np.pi)
+
+#     def compute(
+#         self,
+#         u: dolfinx.fem.Function | ufl.indexed.Indexed,
+#         ds: ufl.Measure,
+#         entity_maps=None,
+#     ):
+#         """Computes the value of the flux at the surface
+
+#         J =int(- D * grad(c) . n * r dS)
+
+#         Args:
+#             u: field for which the flux is computed
+#             ds: surface measure of the model
+#             entity_maps: entity maps relating parent mesh and submesh
+#         """
+#         from scifem import assemble_scalar
+
+#         # obtain mesh normal from field
+#         # if case multispecies, solution is an index, use sub_function_space
+#         if isinstance(u, ufl.indexed.Indexed):
+#             mesh = self.field.sub_function_space.mesh
+#         else:
+#             mesh = u.function_space.mesh
+#         n = ufl.FacetNormal(mesh)
+#         x = ufl.SpatialCoordinate(mesh)
+#         r = x[0]
+
+#         flux = assemble_scalar(
+#             dolfinx.fem.form(
+#                 -self.D * r * ufl.dot(ufl.grad(u), n) * ds(self.surface.id),
+#                 entity_maps=entity_maps,
+#             )
+#         )
+
+#         flux *= self.azimuth_range[1] - self.azimuth_range[0]
+
+#         self.value = flux
+#         self.data.append(self.value)
+
+
+
+# flux_in = CylindricalFlux(field=H, surface=upstream_volume_surfaces)
+# flux_out_1 = CylindricalFlux(field=H, surface=downstream_volume_surfaces)
+# flux_out_2 = CylindricalFlux(field=H, surface=out_surf)
+# flux_out = F.CombinedFlux([flux_out_1, flux_out_2])
+
 my_model.exports = [
     F.VTXSpeciesExport(field=H, filename="out-species_solid.bp", subdomain=solid_volume),
     F.VTXSpeciesExport(field=H, filename="out-species_fluid.bp", subdomain=fluid_volume),
-]
+]#+ [flux_in, flux_out]
 
 my_model.initialise()
 my_model.run()
 
-
+# print(f"In flux: {flux_in.value}")
+# print(f"Out flux: {flux_out.value}")
 
 # # from dolfinx.io import XDMFFile
 
