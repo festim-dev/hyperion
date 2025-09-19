@@ -132,7 +132,8 @@ my_model.initialise()
 
 # add a non-zero initial guess for the solution
 for domain in my_model.volume_subdomains:
-    domain.u.sub(0).x.array[:] = 0.1
+    species_idx = 0  # only one species
+    domain.u.sub(species_idx).x.array[:] = 0.1
 
 my_model.run()
 
