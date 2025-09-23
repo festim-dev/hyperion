@@ -7,3 +7,8 @@ dependencies:
   - festim
   - python-gmsh
   - pyvista
+  - matplotlib
+  - pint
+  - pip
+  - pip:
+      - h_transport_materials
