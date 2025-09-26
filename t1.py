@@ -35,8 +35,8 @@ solubilities_nickel = htm.solubilities.filter(material="nickel").filter(isotope=
 # print(solubilities_nickel[0].value(773) * diffusivities_nickel[0].value(773))
 # exit()
 
-D_solid = diffusivities_nickel[0].pre_exp.magnitude  # m^2/s
-E_D_solid = diffusivities_nickel[0].act_energy.magnitude  # ev/particle
+D_solid = diffusivities_nickel[1].pre_exp.magnitude  # m^2/s
+E_D_solid = diffusivities_nickel[1].act_energy.magnitude  # ev/particle
 K_solid = solubilities_nickel[0].pre_exp.magnitude  # particle m^-3 Pa^-0.5
 E_K_S_solid = solubilities_nickel[0].act_energy.magnitude  # ev/particle
 
@@ -130,7 +130,7 @@ out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
 # )
 
 P_up = 1.30e5  # Pa
-
+P_down = 1.98e2  # Pa
 my_model.boundary_conditions = (
     [
         F.SievertsBC(
@@ -140,7 +140,9 @@ my_model.boundary_conditions = (
     ]
     + [out_surface_bc]
     + [
-        F.FixedConcentrationBC(subdomain=s, species=H, value=0.0)
+        F.SievertsBC(
+            subdomain=s, species=H, pressure=P_down, S_0=K_solid, E_S=E_K_S_solid
+        )
         for s in downstream_volume_surfaces
     ]
 )
@@ -244,7 +246,7 @@ ax.yaxis.get_offset_text().set_fontsize(18)
 
 # Permeability shown in the title (evaluate at 773 K)
 P_773 = (
-    solubilities_nickel[0].value(773) * diffusivities_nickel[0].value(773)
+    solubilities_nickel[0].value(773) * diffusivities_nickel[1].value(773)
 ).magnitude
 ax.set_title(
     f"Fluxes in the system (red = negative). Permeability at 773 K: {P_773:.3e}",
