@@ -35,8 +35,8 @@ solubilities_nickel = htm.solubilities.filter(material="nickel").filter(isotope=
 # print(solubilities_nickel[0].value(773) * diffusivities_nickel[0].value(773))
 # exit()
 
-D_solid = diffusivities_nickel[1].pre_exp.magnitude  # m^2/s
-E_D_solid = diffusivities_nickel[1].act_energy.magnitude  # ev/particle
+D_solid = diffusivities_nickel[0].pre_exp.magnitude  # m^2/s
+E_D_solid = diffusivities_nickel[0].act_energy.magnitude  # ev/particle
 K_solid = solubilities_nickel[0].pre_exp.magnitude  # particle m^-3 Pa^-0.5
 E_K_S_solid = solubilities_nickel[0].act_energy.magnitude  # ev/particle
 
@@ -199,8 +199,8 @@ print(
 
 # Build data
 fluxes = {
-    "experiment run 1 (P=2.779e13)": 2.34121e16,  # experimental value from run 1
-    "experiment run 2 (P=2.728e13)": 2.11179e16,  # experimental value from run 2
+    "experiment run 1 (P=5.557e13)": 4.5268e16,  # experimental value from run 1
+    "experiment run 2 (P=5.457e13)": 4.0832e16,  # experimental value from run 2
     "Flux in (upstream)": float(total_flux_in),
     "Flux out to glovebox": float(total_flux_glovebox),
     "Total downstream flux": float(total_downstream_flux),
@@ -246,7 +246,7 @@ ax.yaxis.get_offset_text().set_fontsize(18)
 
 # Permeability shown in the title (evaluate at 773 K)
 P_773 = (
-    solubilities_nickel[0].value(773) * diffusivities_nickel[1].value(773)
+    solubilities_nickel[0].value(773) * diffusivities_nickel[0].value(773)
 ).magnitude
 ax.set_title(
     f"Fluxes in the system (red = negative). Permeability at 773 K: {P_773:.3e}",
