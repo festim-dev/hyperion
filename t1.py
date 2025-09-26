@@ -114,7 +114,7 @@ my_model.surface_to_volume = {
 H = F.Species("H", subdomains=my_model.volume_subdomains)
 my_model.species = [H]
 
-my_model.temperature = 773
+my_model.temperature = 973
 
 upstream_volume_surfaces = [mem_Ni_bottom, bottom_Ni_top, Up_Ni_left]
 
@@ -129,8 +129,29 @@ out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
 #     subdomain=out_surf, species=H, pressure=p_glovebox, S_0=K_solid, E_S=E_K_S_solid
 # )
 
-P_up = 1.30e5  # Pa
-P_down = 1.98e2  # Pa
+# 773 K run 1
+# P_up = 1.30e5  # Pa
+# P_down = 1.98e2  # Pa
+
+# 773 K run 2
+# P_up = 1.10e5  # Pa
+# P_down = 1.79e2  # Pa
+
+# 873 K run 1
+# P_up = 1.30e5  # Pa
+# P_down = 4.59e2  # Pa
+
+# # 873 K run 2
+# P_up = 1.10e5  # Pa
+# P_down = 4.02e2  # Pa
+
+# 973 K run 1
+# P_up = 1.30e5  # Pa
+# P_down = 8.16e2  # Pa
+
+# 973 K run 2
+P_up = 1.08e5  # Pa
+P_down = 7.36e2  # Pa
 my_model.boundary_conditions = (
     [
         F.SievertsBC(
@@ -199,8 +220,12 @@ print(
 
 # Build data
 fluxes = {
-    "experiment run 1 (P=5.557e13)": 4.5268e16,  # experimental value from run 1
-    "experiment run 2 (P=5.457e13)": 4.0832e16,  # experimental value from run 2
+    # "experiment run 1 (P=5.557e13)": 4.5268e16,  # experimental value from run 1 in 773 K
+    # "experiment run 2 (P=5.457e13)": 4.0832e16,  # experimental value from run 2 in 773 K
+    # "experiment run 1 (P=1.292e14)": 1.0295e17,  # experimental value from run 1 in 873 K
+    # "experiment run 2 (P=1.254e14)": 9.1903e16,  # experimental value from run 2 in 873 K
+    # "experiment run 1 (P=2.368e14)": 1.8485e17,  # experimental value from run 1 in 973 K
+    "experiment run 2 (P=2.308e14)": 1.6525e17,  # experimental value from run 2 in 973 K
     "Flux in (upstream)": float(total_flux_in),
     "Flux out to glovebox": float(total_flux_glovebox),
     "Total downstream flux": float(total_downstream_flux),
@@ -245,11 +270,21 @@ ax.tick_params(axis="y", labelsize=18)
 ax.yaxis.get_offset_text().set_fontsize(18)
 
 # Permeability shown in the title (evaluate at 773 K)
-P_773 = (
-    solubilities_nickel[0].value(773) * diffusivities_nickel[0].value(773)
+# P_773 = (
+#     solubilities_nickel[0].value(773) * diffusivities_nickel[0].value(773)
+# ).magnitude
+
+# Permeability shown in the title (evaluate at 873 K)
+# P_873 = (
+#     solubilities_nickel[0].value(873) * diffusivities_nickel[0].value(873)
+# ).magnitude
+
+# Permeability shown in the title (evaluate at 973 K)
+P_973 = (
+    solubilities_nickel[0].value(973) * diffusivities_nickel[0].value(973)
 ).magnitude
 ax.set_title(
-    f"Fluxes in the system (red = negative). Permeability at 773 K: {P_773:.3e}",
+    f"Fluxes in the system (red = negative). Permeability at 973 K: {P_973:.3e}",
     fontsize=18,
 )
 
