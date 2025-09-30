@@ -138,9 +138,6 @@ upstream_volume_surfaces = [mem_Ni_bottom, bottom_Ni_top, Up_Ni_left]
 downstream_volume_surfaces_Ni = [top_Ni_bottom, Ds_Ni_left]
 downstream_volume_surfaces = [top_Ni_bottom, Ds_Ni_left, Liquid_top]
 
-# case 2: Outside BC as isolated (no flux)
-out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
-
 # constant upstream pressure
 P_up = 1.11e5  # Pa
 
@@ -166,9 +163,7 @@ downstream_surface_bcs = [
     for s in downstream_volume_surfaces_Ni + [Liquid_top]
 ]
 
-my_model.boundary_conditions = (
-    upstream_surface_bcs + [out_surface_bc] + downstream_surface_bcs
-)
+my_model.boundary_conditions = upstream_surface_bcs + downstream_surface_bcs
 
 # transient=True and set stepsize/final_time
 my_model.settings = F.Settings(
