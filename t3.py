@@ -145,11 +145,6 @@ out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
 P_up = 1.11e5  # Pa
 
 
-# make downstream pressure a function of time (seconds -> Pa)
-# def P_down_of_t(t: float) -> float:
-#     return 4.11  # pa
-
-
 # time step & final time (seconds) for transient run
 dt = F.Stepsize(
     initial_value=10, growth_factor=1.1, cutback_factor=0.9, target_nb_iterations=4
@@ -157,36 +152,24 @@ dt = F.Stepsize(
 t_total = 6e4
 
 # transient BCs using time-dependent pressure for downstream sides
+
+upstream_surface_bcs = [
+    F.SievertsBC(
+        subdomain=s, species=H, pressure=P_up, S_0=K_solid, E_S=E_K_S_solid
+    )  ###NOTE: E_s can not be 0.
+    for s in upstream_volume_surfaces
+]
+downstream_surface_bcs = [
+    F.FixedConcentrationBC(
+        subdomain=s, species=H, value=0.0
+    )  # downstream partial pressure is ~5 Pa << P_up ~1e5 Pa
+    for s in downstream_volume_surfaces_Ni + [Liquid_top]
+]
+
 my_model.boundary_conditions = (
-    [
-        F.SievertsBC(
-            subdomain=s, species=H, pressure=P_up, S_0=K_solid, E_S=E_K_S_solid
-        )  ###NOTE: E_s can not be 0.
-        for s in upstream_volume_surfaces
-    ]
-    + [out_surface_bc]
-    + [
-        # F.SievertsBC(
-        #     subdomain=s, species=H, pressure=P_down_of_t, S_0=K_solid, E_S=E_K_S_solid
-        # )
-        F.FixedConcentrationBC(
-            subdomain=s, species=H, value=0.0
-        )  # for simplicity, we use fixed concentration BC instead of time-dependent Sieverts BC
-        for s in downstream_volume_surfaces_Ni
-    ]
-    + [
-        # F.HenrysBC(
-        #     subdomain=Liquid_top,
-        #     species=H,
-        #     pressure=P_down_of_t,
-        #     H_0=K_liquid,
-        #     E_H=E_K_S_liquid,
-        # )  ###NOTE: E_s can not be 0.
-        F.FixedConcentrationBC(
-            subdomain=Liquid_top, species=H, value=0.0
-        )  # for simplicity, we use fixed concentration BC instead of time-dependent Henrys BC
-    ]
+    upstream_surface_bcs + [out_surface_bc] + downstream_surface_bcs
 )
+
 # transient=True and set stepsize/final_time
 my_model.settings = F.Settings(
     atol=1e12,
