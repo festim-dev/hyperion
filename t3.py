@@ -1,0 +1,289 @@
+from mesh import generate_mesh
+from dolfinx.log import set_log_level, LogLevel
+from cylindrical_flux import CylindricalFlux
+from dolfinx.io import gmshio
+from mpi4py import MPI
+import festim as F
+import h_transport_materials as htm
+
+import matplotlib.pyplot as plt
+import numpy as np
+import csv
+
+set_log_level(LogLevel.INFO)
+
+generate_mesh(mesh_size=2e-4)
+model_rank = 0
+mesh, cell_tags, facet_tags = gmshio.read_from_msh(
+    "mesh.msh", MPI.COMM_WORLD, model_rank
+)
+
+# filter nickel and H
+diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(isotope="h")
+solubilities_nickel = htm.solubilities.filter(material="nickel").filter(isotope="h")
+
+# material parameters for Nickel
+# based on the dry run, the lower permeability seems to match better
+# so we use diffusivities_nickel[1]
+D_solid = diffusivities_nickel[1].pre_exp.magnitude  # m^2/s
+E_D_solid = diffusivities_nickel[1].act_energy.magnitude  # ev/particle
+K_solid = solubilities_nickel[0].pre_exp.magnitude  # particle m^-3 Pa^-0.5
+E_K_S_solid = solubilities_nickel[0].act_energy.magnitude  # ev/particle
+
+# material parameters for FLiBe
+# we will fix the diffusivity based on literature, and change the solubility to match the experiment flux curve
+diffusivities_flibe = htm.diffusivities.filter(material="flibe").filter(isotope="h")
+solubilities_flibe = htm.solubilities.filter(material="flibe").filter(isotope="h")
+
+D_liquid = diffusivities_flibe[0].pre_exp.magnitude  # m^2/s
+E_D_liquid = diffusivities_flibe[0].act_energy.magnitude  # ev/particle
+K_liquid = solubilities_flibe[0].pre_exp.magnitude  # particle m^-3 Pa^-1
+E_K_S_liquid = solubilities_flibe[
+    0
+].act_energy.magnitude  # ev/particle. NOTE: This is a negative value.
+
+
+print("solubilities_flibe")
+print(solubilities_flibe[0])
+print("diffusivities_flibe")
+print(diffusivities_flibe[0])
+exit()
+# print("solubilities_FLiBe")
+# print(solubilities_flibe[0].value(773))
+# print("diffusivities_FLiBe")
+# print(diffusivities_flibe[0].value(773))
+# print("permeabilities_FLiBe")
+# print(solubilities_flibe[0].value(773) * diffusivities_flibe[0].value(773))
+# exit()
+
+# Define materials
+mat_solid = F.Material(
+    D_0=D_solid,
+    E_D=E_D_solid,
+    K_S_0=K_solid,
+    E_K_S=E_K_S_solid,
+    solubility_law="sievert",
+)
+mat_liquid = F.Material(
+    D_0=D_liquid,
+    E_D=E_D_liquid,
+    K_S_0=K_liquid,
+    E_K_S=E_K_S_liquid,
+    solubility_law="henry",
+)
+
+fluid_volume = F.VolumeSubdomain(id=1, material=mat_liquid)
+solid_volume = F.VolumeSubdomain(id=2, material=mat_solid)
+
+out_surf = F.SurfaceSubdomain(id=3)
+left_bc_liquid = F.SurfaceSubdomain(id=41)
+left_bc_top_Ni = F.SurfaceSubdomain(id=42)
+left_bc_middle_Ni = F.SurfaceSubdomain(id=43)
+left_bc_bottom_Ni = F.SurfaceSubdomain(id=44)
+top_Ni_bottom = F.SurfaceSubdomain(id=5)
+Ds_Ni_left = F.SurfaceSubdomain(id=6)
+Up_Ni_left = F.SurfaceSubdomain(id=7)
+Liquid_top = F.SurfaceSubdomain(id=8)
+mem_Ni_bottom = F.SurfaceSubdomain(id=9)
+bottom_Ni_top = F.SurfaceSubdomain(id=10)
+liquid_solid_interface = F.SurfaceSubdomain(id=99)
+
+my_model = F.HydrogenTransportProblemDiscontinuous()
+my_model.mesh = F.Mesh(mesh, coordinate_system="cylindrical")
+
+my_model.facet_meshtags = facet_tags
+my_model.volume_meshtags = cell_tags
+
+my_model.subdomains = [
+    solid_volume,
+    fluid_volume,
+    out_surf,
+    left_bc_liquid,
+    left_bc_top_Ni,
+    left_bc_middle_Ni,
+    left_bc_bottom_Ni,
+    top_Ni_bottom,
+    Ds_Ni_left,
+    Up_Ni_left,
+    Liquid_top,
+    mem_Ni_bottom,
+    bottom_Ni_top,
+    liquid_solid_interface,
+]
+
+my_model.method_interface = "penalty"
+interface = F.Interface(
+    id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e24
+)
+my_model.interfaces = [interface]
+
+my_model.surface_to_volume = {
+    out_surf: solid_volume,
+    left_bc_liquid: fluid_volume,  # NOTE: this is fluid
+    left_bc_top_Ni: solid_volume,
+    left_bc_middle_Ni: solid_volume,
+    left_bc_bottom_Ni: solid_volume,
+    top_Ni_bottom: solid_volume,
+    Ds_Ni_left: solid_volume,
+    Up_Ni_left: solid_volume,
+    Liquid_top: fluid_volume,
+    mem_Ni_bottom: solid_volume,
+    bottom_Ni_top: solid_volume,
+}
+
+H = F.Species("H", subdomains=my_model.volume_subdomains)
+my_model.species = [H]
+
+my_model.temperature = 773
+
+upstream_volume_surfaces = [mem_Ni_bottom, bottom_Ni_top, Up_Ni_left]
+downstream_volume_surfaces_Ni = [top_Ni_bottom, Ds_Ni_left]
+downstream_volume_surfaces = [top_Ni_bottom, Ds_Ni_left, Liquid_top]
+
+# case 2: Outside BC as isolated (no flux)
+out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
+
+# constant upstream pressure
+P_up = 1.11e5  # Pa
+
+
+# make downstream pressure a function of time (seconds -> Pa)
+# def P_down_of_t(t: float) -> float:
+#     return 4.11  # pa
+
+
+# time step & final time (seconds) for transient run
+dt = 10.0
+t_total = 6e4
+
+# transient BCs using time-dependent pressure for downstream sides
+my_model.boundary_conditions = (
+    [
+        F.SievertsBC(
+            subdomain=s, species=H, pressure=P_up, S_0=K_solid, E_S=E_K_S_solid
+        )  ###NOTE: E_s can not be 0.
+        for s in upstream_volume_surfaces
+    ]
+    + [out_surface_bc]
+    + [
+        # F.SievertsBC(
+        #     subdomain=s, species=H, pressure=P_down_of_t, S_0=K_solid, E_S=E_K_S_solid
+        # )
+        F.FixedConcentrationBC(
+            subdomain=s, species=H, value=0.0
+        )  # for simplicity, we use fixed concentration BC instead of time-dependent Sieverts BC
+        for s in downstream_volume_surfaces_Ni
+    ]
+    + [
+        # F.HenrysBC(
+        #     subdomain=Liquid_top,
+        #     species=H,
+        #     pressure=P_down_of_t,
+        #     H_0=K_liquid,
+        #     E_H=E_K_S_liquid,
+        # )  ###NOTE: E_s can not be 0.
+        F.FixedConcentrationBC(
+            subdomain=Liquid_top, species=H, value=0.0
+        )  # for simplicity, we use fixed concentration BC instead of time-dependent Henrys BC
+    ]
+)
+# transient=True and set stepsize/final_time
+my_model.settings = F.Settings(
+    atol=1e12,
+    rtol=1e-10,
+    transient=True,
+    stepsize=dt,
+    final_time=t_total,
+)
+
+# -------- flux monitors --------
+fluxes_in = [
+    CylindricalFlux(field=H, surface=surf) for surf in upstream_volume_surfaces
+]
+downstream_fluxes_total = [
+    CylindricalFlux(field=H, surface=surf) for surf in downstream_volume_surfaces
+]
+glovebox_flux = CylindricalFlux(field=H, surface=out_surf)
+flux_out_liquid = CylindricalFlux(field=H, surface=Liquid_top)
+flux_out_Ni_sidewall = CylindricalFlux(field=H, surface=Ds_Ni_left)
+flux_out_top_Ni_bottom = CylindricalFlux(field=H, surface=top_Ni_bottom)
+
+# field exports for visualization (optional)
+my_model.exports = [
+    F.VTXSpeciesExport(
+        field=H, filename="FLiBe_infinite_PRF_solid.bp", subdomain=solid_volume
+    ),
+    F.VTXSpeciesExport(
+        field=H, filename="FLiBe_infinite_PRF_liquid.bp", subdomain=fluid_volume
+    ),
+]
+# add flux monitors to exports so they are evaluated at every time step
+my_model.exports += downstream_fluxes_total
+my_model.exports += fluxes_in
+my_model.exports += [
+    glovebox_flux,
+    flux_out_liquid,
+    flux_out_Ni_sidewall,
+    flux_out_top_Ni_bottom,
+]
+
+# -------- initialise & run transient  --------
+my_model.initialise()
+my_model.show_progress_bar = True
+my_model.run()
+
+t = np.asarray(glovebox_flux.t, dtype=float)  # seconds
+
+v_glovebox = np.asarray(glovebox_flux.data, dtype=float)
+v_out_liquid = np.asarray(flux_out_liquid.data, dtype=float)
+v_downstream_sidewall = np.asarray(flux_out_Ni_sidewall.data, dtype=float)
+v_downstream_top = np.asarray(flux_out_top_Ni_bottom.data, dtype=float)
+
+v_downstream_total = v_out_liquid + v_downstream_sidewall + v_downstream_top
+
+v_in_terms = [np.asarray(f.data, dtype=float) for f in fluxes_in]
+
+assert all(len(x) == len(t) for x in v_in_terms), (
+    "Inlet flux series have mismatched lengths."
+)
+v_in_total = np.sum(np.stack(v_in_terms, axis=0), axis=0)
+
+
+v_balance = v_in_total + v_glovebox + v_downstream_total
+
+
+all_fluxes = {
+    "Flux_in_total": v_in_total,
+    "Flux_downstream_total": v_downstream_total,
+    "Flux_glovebox": v_glovebox,
+    "Flux_liquid_top": v_out_liquid,
+    "Flux_Ni_sidewall": v_downstream_sidewall,
+    "Flux_Ni_top": v_downstream_top,
+    "Flux_balance": v_balance,
+}
+
+with open("all_flux_results.csv", "w", newline="") as f:
+    writer = csv.writer(f)
+    header = ["time [s]"] + list(all_fluxes.keys())
+    writer.writerow(header)
+
+    for i in range(len(t)):
+        row = [t[i]] + [vals[i] for vals in all_fluxes.values()]
+        writer.writerow(row)
+
+
+plt.figure(figsize=(12, 6))
+# plt.plot(t, v_in_total, label="Flux into upstream space")
+plt.plot(t, v_downstream_total, label="Flux outside downstream space")
+# plt.plot(t, v_glovebox, label="Flux to glovebox")
+plt.plot(t, v_out_liquid, label="Flux through liquid top")
+plt.plot(t, v_downstream_sidewall, label="Flux through Ni downstream sidewall")
+# plt.plot(t, v_downstream_top, label="Flux through Ni downstream top")
+# plt.plot(t, v_balance, "--", label="Flux balance (in + glovebox + downstream)")
+
+plt.xlabel("Time (s)")
+plt.ylabel("Flux [H/s]")
+plt.title("All flux monitors vs time")
+plt.legend(loc="best", ncol=2)
+plt.tight_layout()
+plt.show()
