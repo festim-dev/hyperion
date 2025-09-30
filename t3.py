@@ -47,14 +47,12 @@ print("solubilities_flibe")
 print(solubilities_flibe[0])
 print("diffusivities_flibe")
 print(diffusivities_flibe[0])
-exit()
 # print("solubilities_FLiBe")
 # print(solubilities_flibe[0].value(773))
 # print("diffusivities_FLiBe")
 # print(diffusivities_flibe[0].value(773))
 # print("permeabilities_FLiBe")
 # print(solubilities_flibe[0].value(773) * diffusivities_flibe[0].value(773))
-# exit()
 
 # Define materials
 mat_solid = F.Material(
@@ -153,7 +151,9 @@ P_up = 1.11e5  # Pa
 
 
 # time step & final time (seconds) for transient run
-dt = 10.0
+dt = F.Stepsize(
+    initial_value=10, growth_factor=1.1, cutback_factor=0.9, target_nb_iterations=4
+)
 t_total = 6e4
 
 # transient BCs using time-dependent pressure for downstream sides
@@ -190,7 +190,7 @@ my_model.boundary_conditions = (
 # transient=True and set stepsize/final_time
 my_model.settings = F.Settings(
     atol=1e12,
-    rtol=1e-10,
+    rtol=1e-13,
     transient=True,
     stepsize=dt,
     final_time=t_total,
