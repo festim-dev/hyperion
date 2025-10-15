@@ -1,5 +1,13 @@
 import gmsh
 
+y_ft = 0.02930  # default; will be overwritten by set_y_ft(...)
+
+
+def set_y_ft(value: float) -> None:
+    """Set FLiBe thickness [m] before calling generate_mesh()."""
+    global y_ft
+    y_ft = float(value)
+
 
 def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     # Initialize the GMSH API
@@ -14,7 +22,8 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     y_bT = 0.002  # 0.20 cm (bottom Ni top)
     y_mB = 0.022  # 2.20 cm (middle thin Ni bottom)
     y_mT = 0.024  # 2.40 cm (middle thin Ni top)
-    y_fT = 0.0319  # 3.19 cm (fluid top)
+    # thisckness of salt layer in 500 C is 0.00514 m
+    y_fT = 0.02914
     y_tIn = 0.1091  # 10.91 cm (top Ni bottom / inner top)
     y_tOut = 0.1111  # 11.11 cm (top Ni outer top)
 
@@ -64,7 +73,6 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     left_bc_bottom_Ni = gmsh.model.addPhysicalGroup(1, [15], tag=44)
     gmsh.model.setPhysicalName(1, left_bc_bottom_Ni, "left_bc_bottom_Ni")
 
-
     top_Ni_bottom = gmsh.model.addPhysicalGroup(1, [9], tag=5)
     gmsh.model.setPhysicalName(1, top_Ni_bottom, "top_Ni_bottom")
 
@@ -75,18 +83,21 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     gmsh.model.setPhysicalName(1, Up_Ni_left, "Up_Ni_left")
 
     Liquid_top = gmsh.model.addPhysicalGroup(1, [3], tag=8)
-    gmsh.model.setPhysicalName(1, Liquid_top, "Liquid_top")    
+    gmsh.model.setPhysicalName(1, Liquid_top, "Liquid_top")
 
     mem_Ni_bottom = gmsh.model.addPhysicalGroup(1, [12], tag=9)
-    gmsh.model.setPhysicalName(1, mem_Ni_bottom, "mem_Ni_bottom")    
+    gmsh.model.setPhysicalName(1, mem_Ni_bottom, "mem_Ni_bottom")
 
     bottom_Ni_top = gmsh.model.addPhysicalGroup(1, [14], tag=10)
     gmsh.model.setPhysicalName(1, bottom_Ni_top, "bottom_Ni_top")
 
+    boundary_Liquid = set(
+        gmsh.model.getBoundary([(2, 5)], oriented=False, recursive=False)
+    )
+    boundary_solid = set(
+        gmsh.model.getBoundary([(2, 10)], oriented=False, recursive=False)
+    )
 
-    boundary_Liquid = set(gmsh.model.getBoundary([(2, 5)], oriented=False, recursive=False))
-    boundary_solid = set(gmsh.model.getBoundary([(2, 10)], oriented=False, recursive=False))
-    
     interface_curves = list(boundary_Liquid.intersection(boundary_solid))
 
     curve_tags = [c[1] for c in interface_curves]  # [1, 2]
@@ -103,10 +114,10 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     # write to file
     gmsh.write(fname)
 
-    gmsh.finalize()
+
+#    gmsh.finalize()
 
 
 if __name__ == "__main__":
     generate_mesh()
     gmsh.fltk.run()
-
