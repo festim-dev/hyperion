@@ -73,32 +73,32 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     left_bc_bottom_Ni = gmsh.model.addPhysicalGroup(1, [15], tag=44)
     gmsh.model.setPhysicalName(1, left_bc_bottom_Ni, "left_bc_bottom_Ni")
 
-    top_Ni_bottom = gmsh.model.addPhysicalGroup(1, [9], tag=5)
-    gmsh.model.setPhysicalName(1, top_Ni_bottom, "top_Ni_bottom")
+    top_cap_Ni = gmsh.model.addPhysicalGroup(1, [9], tag=5)
+    gmsh.model.setPhysicalName(1, top_cap_Ni, "top_cap_Ni")
 
-    Ds_Ni_left = gmsh.model.addPhysicalGroup(1, [10], tag=6)
-    gmsh.model.setPhysicalName(1, Ds_Ni_left, "Ds_Ni_left")
+    top_sidewall_Ni = gmsh.model.addPhysicalGroup(1, [10], tag=6)
+    gmsh.model.setPhysicalName(1, top_sidewall_Ni, "top_sidewall_Ni")
 
-    Up_Ni_left = gmsh.model.addPhysicalGroup(1, [13], tag=7)
-    gmsh.model.setPhysicalName(1, Up_Ni_left, "Up_Ni_left")
+    bottom_sidewall_Ni = gmsh.model.addPhysicalGroup(1, [13], tag=7)
+    gmsh.model.setPhysicalName(1, bottom_sidewall_Ni, "bottom_sidewall_Ni")
 
-    Liquid_top = gmsh.model.addPhysicalGroup(1, [3], tag=8)
-    gmsh.model.setPhysicalName(1, Liquid_top, "Liquid_top")
+    liquid_surface = gmsh.model.addPhysicalGroup(1, [3], tag=8)
+    gmsh.model.setPhysicalName(1, liquid_surface, "liquid_surface")
 
-    mem_Ni_bottom = gmsh.model.addPhysicalGroup(1, [12], tag=9)
-    gmsh.model.setPhysicalName(1, mem_Ni_bottom, "mem_Ni_bottom")
+    mid_membrane_Ni = gmsh.model.addPhysicalGroup(1, [12], tag=9)
+    gmsh.model.setPhysicalName(1, mid_membrane_Ni, "mid_membrane_Ni")
 
-    bottom_Ni_top = gmsh.model.addPhysicalGroup(1, [14], tag=10)
-    gmsh.model.setPhysicalName(1, bottom_Ni_top, "bottom_Ni_top")
+    bottom_cap_Ni = gmsh.model.addPhysicalGroup(1, [14], tag=10)
+    gmsh.model.setPhysicalName(1, bottom_cap_Ni, "bottom_cap_Ni")
 
-    boundary_Liquid = set(
+    boundary_liquid = set(
         gmsh.model.getBoundary([(2, 5)], oriented=False, recursive=False)
     )
     boundary_solid = set(
         gmsh.model.getBoundary([(2, 10)], oriented=False, recursive=False)
     )
 
-    interface_curves = list(boundary_Liquid.intersection(boundary_solid))
+    interface_curves = list(boundary_liquid.intersection(boundary_solid))
 
     curve_tags = [c[1] for c in interface_curves]  # [1, 2]
     liquid_Ni_interface = gmsh.model.addPhysicalGroup(1, curve_tags, tag=99)
