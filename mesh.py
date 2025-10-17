@@ -28,13 +28,13 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     y_tOut = 0.1111  # 11.11 cm (top Ni outer top)
 
     # make rectangles
-    solid_bottom = gmsh.model.occ.addRectangle(0, y0, 0, x_in, y_bT - y0, tag=1)
-    solid_middle = gmsh.model.occ.addRectangle(0, y_mB, 0, x_in, y_mT - y_mB, tag=2)
-    solid_top = gmsh.model.occ.addRectangle(0, y_tIn, 0, x_in, y_tOut - y_tIn, tag=3)
-    solid_right = gmsh.model.occ.addRectangle(
+    gmsh.model.occ.addRectangle(0, y0, 0, x_in, y_bT - y0, tag=1)
+    gmsh.model.occ.addRectangle(0, y_mB, 0, x_in, y_mT - y_mB, tag=2)
+    gmsh.model.occ.addRectangle(0, y_tIn, 0, x_in, y_tOut - y_tIn, tag=3)
+    gmsh.model.occ.addRectangle(
         x_in, y0, 0, x_out - x_in, y_tOut - y0, tag=4
     )
-    salt_rectangle = gmsh.model.occ.addRectangle(0, y_mT, 0, x_in, y_fT - y_mT, tag=5)
+    gmsh.model.occ.addRectangle(0, y_mT, 0, x_in, y_fT - y_mT, tag=5)
 
     # fuse all solid parts
     gmsh.model.occ.fuse([(2, 1), (2, 2), (2, 3)], [(2, 4)], tag=10)
