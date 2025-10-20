@@ -112,7 +112,7 @@ def make_model(
 
     # --- Generate mesh file only if missing
     mesh_file = f"mesh_{y_ft:.5f}.msh"
-    generate_mesh(mesh_size=mesh_size, fname=mesh_file)
+    # generate_mesh(mesh_size=mesh_size, fname=mesh_file)
 
     # --- Load and reuse mesh from cache (avoids repeated communicator creation)
     model_rank = 0
@@ -511,11 +511,6 @@ def _collect_points_for_cases(
 def _ensure_fig_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
 
-def _ensure_and_save(fig, path: Path, dpi=220):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-
 def _arrhenius_str(Phi0: float, E_eV: float, unit="H·m⁻¹·s⁻¹·Pa⁻¹") -> str:
     """
     Produce a neat Arrhenius law string for annotation.
@@ -911,6 +906,7 @@ if __name__ == "__main__":
     K_S_nickel = solubilities_nickel[1]
 
     D_flibe = htm.Diffusivity(D_0=2.5e-7, E_D=0.24)
+    # permeability_flibe = htm.Permeability(pre_exp=2.0e13, act_energy=0.44, law="henry")
     permeability_flibe = htm.Permeability(pre_exp=2.0e13, act_energy=0.44, law="henry")
 
     # Temperatures and K conversion
