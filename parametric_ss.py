@@ -18,6 +18,9 @@ import matplotlib
 from typing import Optional
 
 
+_DEFER_SHOW = True 
+
+
 def make_materials(D_solid, D_liquid, K_solid, permeability_liquid):
     # material parameters for solid
     D_0_solid = D_solid.pre_exp.magnitude  # m^2/s
@@ -55,23 +58,27 @@ def make_materials(D_solid, D_liquid, K_solid, permeability_liquid):
     )
     return mat_solid, mat_liquid
 
+_mesh_cache = {}
 
-# ---------- figure folders + saving---------
-def fig_dir_for(case: str, Tc_C: int, run_label: str) -> Path:
-    safe_run = run_label.replace(" ", "")
-    d = Path("exports") / "figs" / case / f"{Tc_C}C" / safe_run
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def load_or_make_mesh(mesh_file, mesh_size, model_rank=0):
+    """
+    Load an existing mesh or create it once and reuse.
+    This prevents new MPI communicators from being created every run.
+    """
+    # If mesh file does not exist yet, generate it
+    if not Path(mesh_file).exists():
+        generate_mesh(mesh_size=mesh_size, fname=mesh_file)
 
+    # If the mesh is already cached in memory, reuse it
+    if mesh_file in _mesh_cache:
+        return _mesh_cache[mesh_file]
 
-def save_overview(fig, case: str, name: str = "overview"):
-    out = Path("exports") / "figs" / case
-    out.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out / f"{name}.png", dpi=220, bbox_inches="tight")
-
-
-def save_breakdown(fig, fig_dir: Path, stem: str):
-    fig.savefig(fig_dir / f"{stem}.png", dpi=220, bbox_inches="tight")
+    # Otherwise, read from disk and store in cache
+    mesh, cell_tags, facet_tags = gmshio.read_from_msh(
+        mesh_file, MPI.COMM_WORLD, model_rank
+    )
+    _mesh_cache[mesh_file] = (mesh, cell_tags, facet_tags)
+    return _mesh_cache[mesh_file]
 
 
 def make_model(
@@ -95,11 +102,22 @@ def make_model(
 ) -> Tuple[F.HydrogenTransportProblemDiscontinuous, dict[str, list | CylindricalFlux]]:
     if y_ft is not None:
         set_y_ft(y_ft)
+    else:
+        raise ValueError("y_ft must be provided")
 
-    generate_mesh(mesh_size=mesh_size)
+    # --- Record each y_ft value to a separate log file to examine correctness ---
+    Path("exports/yft_record").mkdir(parents=True, exist_ok=True)
+    with open("exports/yft_record/y_ft_values.txt", "a") as f:
+        f.write(f"{y_ft:.5f}\n")
+
+    # --- Generate mesh file only if missing
+    mesh_file = f"mesh_{y_ft:.5f}.msh"
+    generate_mesh(mesh_size=mesh_size, fname=mesh_file)
+
+    # --- Load and reuse mesh from cache (avoids repeated communicator creation)
     model_rank = 0
-    mesh, cell_tags, facet_tags = gmshio.read_from_msh(
-        "mesh.msh", MPI.COMM_WORLD, model_rank
+    mesh, cell_tags, facet_tags = load_or_make_mesh(
+        mesh_file, mesh_size, model_rank=model_rank
     )
 
     mat_solid, mat_liquid = make_materials(
@@ -129,12 +147,12 @@ def make_model(
     left_bc_top_Ni = F.SurfaceSubdomain(id=42)
     left_bc_middle_Ni = F.SurfaceSubdomain(id=43)
     left_bc_bottom_Ni = F.SurfaceSubdomain(id=44)
-    top_Ni_bottom = F.SurfaceSubdomain(id=5)
-    Ds_Ni_left = F.SurfaceSubdomain(id=6)
-    Up_Ni_left = F.SurfaceSubdomain(id=7)
-    Liquid_top = F.SurfaceSubdomain(id=8)
-    mem_Ni_bottom = F.SurfaceSubdomain(id=9)
-    bottom_Ni_top = F.SurfaceSubdomain(id=10)
+    top_cap_Ni = F.SurfaceSubdomain(id=5)
+    top_sidewall_Ni = F.SurfaceSubdomain(id=6)
+    bottom_sidewall_Ni = F.SurfaceSubdomain(id=7)
+    liquid_surface = F.SurfaceSubdomain(id=8)
+    mid_membrane_Ni = F.SurfaceSubdomain(id=9)
+    bottom_cap_Ni = F.SurfaceSubdomain(id=10)
     liquid_solid_interface = F.SurfaceSubdomain(id=99)
 
     my_model = F.HydrogenTransportProblemDiscontinuous()
@@ -151,12 +169,12 @@ def make_model(
         left_bc_top_Ni,
         left_bc_middle_Ni,
         left_bc_bottom_Ni,
-        top_Ni_bottom,
-        Ds_Ni_left,
-        Up_Ni_left,
-        Liquid_top,
-        mem_Ni_bottom,
-        bottom_Ni_top,
+        top_cap_Ni,
+        top_sidewall_Ni,
+        bottom_sidewall_Ni,
+        liquid_surface,
+        mid_membrane_Ni,
+        bottom_cap_Ni,
         liquid_solid_interface,
     ]
 
@@ -172,12 +190,12 @@ def make_model(
         left_bc_top_Ni: solid_volume,
         left_bc_middle_Ni: solid_volume,
         left_bc_bottom_Ni: solid_volume,
-        top_Ni_bottom: solid_volume,
-        Ds_Ni_left: solid_volume,
-        Up_Ni_left: solid_volume,
-        Liquid_top: fluid_volume,
-        mem_Ni_bottom: solid_volume,
-        bottom_Ni_top: solid_volume,
+        top_cap_Ni: solid_volume,
+        top_sidewall_Ni: solid_volume,
+        bottom_sidewall_Ni: solid_volume,
+        liquid_surface: fluid_volume,
+        mid_membrane_Ni: solid_volume,
+        bottom_cap_Ni: solid_volume,
     }
 
     H = F.Species("H", subdomains=my_model.volume_subdomains)
@@ -195,16 +213,16 @@ def make_model(
             F.SievertsBC(
                 subdomain=s, species=H, pressure=P_up, S_0=K_S_0_Ni, E_S=E_S_Ni
             )
-            for s in [mem_Ni_bottom, bottom_Ni_top, Up_Ni_left]
+            for s in [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
         ]
         downstream_bcs = [
             F.SievertsBC(
                 subdomain=s, species=H, pressure=P_down, S_0=K_S_0_Ni, E_S=E_S_Ni
             )
-            for s in [top_Ni_bottom, Ds_Ni_left]
+            for s in [top_cap_Ni, top_sidewall_Ni]
         ] + [
             F.HenrysBC(
-                subdomain=Liquid_top,
+                subdomain=liquid_surface,
                 species=H,
                 pressure=P_down,
                 H_0=H_0_liq,
@@ -218,17 +236,17 @@ def make_model(
             F.SievertsBC(
                 subdomain=s, species=H, pressure=P_up, S_0=K_S_0_Ni, E_S=E_S_Ni
             )
-            for s in [top_Ni_bottom, Ds_Ni_left]
+            for s in [top_cap_Ni, top_sidewall_Ni]
         ] + [
             F.HenrysBC(
-                subdomain=Liquid_top, species=H, pressure=P_up, H_0=H_0_liq, E_H=E_H_liq
+                subdomain=liquid_surface, species=H, pressure=P_up, H_0=H_0_liq, E_H=E_H_liq
             )
         ]
         downstream_bcs = [
             F.SievertsBC(
                 subdomain=s, species=H, pressure=P_down, S_0=K_S_0_Ni, E_S=E_S_Ni
             )
-            for s in [mem_Ni_bottom, bottom_Ni_top, Up_Ni_left]
+            for s in [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
         ]
     else:
         raise ValueError(f"Unknown case: {case}")
@@ -240,8 +258,8 @@ def make_model(
     out_bcs = []
     if out_bc is None:
         out_bc = {"type": "none"}
-    t = out_bc.get("type", "none").lower()
-    if t == "sieverts":
+    keywords = out_bc.get("type", "none").lower()
+    if keywords == "sieverts":
         out_bcs = [
             F.SievertsBC(
                 subdomain=out_surf,
@@ -251,7 +269,7 @@ def make_model(
                 E_S=E_S_Ni,
             )
         ]
-    elif t == "particle_flux_zero":
+    elif keywords == "particle_flux_zero":
         out_bcs = [F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)]
 
     my_model.boundary_conditions = upstream_bcs + downstream_bcs + out_bcs
@@ -260,57 +278,57 @@ def make_model(
     # -------- flux monitors (register each surface explicitly) --------
     # Six monitored faces: three upstream, three downstream
     # A = liquid-side surfaces, B = solid-side surfaces
-    flux_out_top_Ni_bottom = CylindricalFlux(field=H, surface=top_Ni_bottom)  # A
-    flux_out_Ds_Ni_left = CylindricalFlux(field=H, surface=Ds_Ni_left)  # A
-    flux_out_Up_Ni_left = CylindricalFlux(field=H, surface=Up_Ni_left)  # B
-    flux_out_Liquid_top = CylindricalFlux(field=H, surface=Liquid_top)  # A
-    flux_out_mem_Ni_bottom = CylindricalFlux(field=H, surface=mem_Ni_bottom)  # B
-    flux_out_bottom_Ni_top = CylindricalFlux(field=H, surface=bottom_Ni_top)  # B
+    flux_out_top_cap_Ni = CylindricalFlux(field=H, surface=top_cap_Ni)  # A
+    flux_out_top_sidewall_Ni = CylindricalFlux(field=H, surface=top_sidewall_Ni)  # A
+    flux_out_liquid_surface = CylindricalFlux(field=H, surface=liquid_surface)  # A
+    flux_out_mid_membrane_Ni = CylindricalFlux(field=H, surface=mid_membrane_Ni)  # B
+    flux_out_bottom_sidewall_Ni = CylindricalFlux(field=H, surface=bottom_sidewall_Ni)  # B
+    flux_out_bottom_cap_Ni = CylindricalFlux(field=H, surface=bottom_cap_Ni)  # B
 
     # glovebox outlet (external surface)
     glovebox_flux = CylindricalFlux(field=H, surface=out_surf)
 
     # register fluxes into model exports
     my_model.exports = [
-        flux_out_top_Ni_bottom,
-        flux_out_Ds_Ni_left,
-        flux_out_Up_Ni_left,
-        flux_out_Liquid_top,
-        flux_out_mem_Ni_bottom,
-        flux_out_bottom_Ni_top,
+        flux_out_top_cap_Ni,
+        flux_out_top_sidewall_Ni,
+        flux_out_bottom_sidewall_Ni,
+        flux_out_liquid_surface,
+        flux_out_mid_membrane_Ni,
+        flux_out_bottom_cap_Ni,
         glovebox_flux,
     ]
 
     # explicit label-to-object mapping for easy reference
     flux_by_label = {
-        "top_Ni_bottom": flux_out_top_Ni_bottom,
-        "Ds_Ni_left": flux_out_Ds_Ni_left,
-        "Up_Ni_left": flux_out_Up_Ni_left,
-        "Liquid_top": flux_out_Liquid_top,
-        "mem_Ni_bottom": flux_out_mem_Ni_bottom,
-        "bottom_Ni_top": flux_out_bottom_Ni_top,
+        "top_cap_Ni": flux_out_top_cap_Ni,
+        "top_sidewall_Ni": flux_out_top_sidewall_Ni,
+        "liquid_surface": flux_out_liquid_surface,
+        "mid_membrane_Ni": flux_out_mid_membrane_Ni,
+        "bottom_sidewall_Ni": flux_out_bottom_sidewall_Ni,
+        "bottom_cap_Ni": flux_out_bottom_cap_Ni,
     }
 
     # list of labels for plotting and output order
     six_labels = [
-        "top_Ni_bottom",
-        "Ds_Ni_left",
-        "Up_Ni_left",
-        "Liquid_top",
-        "mem_Ni_bottom",
-        "bottom_Ni_top",
+        "top_cap_Ni",
+        "top_sidewall_Ni",
+        "liquid_surface",
+        "mid_membrane_Ni",
+        "bottom_sidewall_Ni",
+        "bottom_cap_Ni",
     ]
 
     # upstream/downstream definitions depend on case type
     up_labels = (
-        ["mem_Ni_bottom", "bottom_Ni_top", "Up_Ni_left"]
+        ["mid_membrane_Ni", "bottom_cap_Ni", "bottom_sidewall_Ni"]
         if case in ("normal_infinite", "normal_transparent")
-        else ["top_Ni_bottom", "Ds_Ni_left", "Liquid_top"]
+        else ["top_cap_Ni", "top_sidewall_Ni", "liquid_surface"]
     )
     down_labels = (
-        ["top_Ni_bottom", "Ds_Ni_left", "Liquid_top"]
+        ["top_cap_Ni", "top_sidewall_Ni", "liquid_surface"]
         if case in ("normal_infinite", "normal_transparent")
-        else ["mem_Ni_bottom", "bottom_Ni_top", "Up_Ni_left"]
+        else ["mid_membrane_Ni", "bottom_cap_Ni", "bottom_sidewall_Ni"]
     )
 
     # package all flux information into dictionary
@@ -340,7 +358,6 @@ def _get_flux_value(flux_obj) -> float:
         pass
     return 0.0
 
-
 def run_once(
     case: str,
     T_K: float,
@@ -356,7 +373,7 @@ def run_once(
     """
     Solve steady-state once and return all relevant flux numbers for plotting.
     """
-    my_model, flux = make_model(
+    my_model, fluxes_dict = make_model(
         temperature=T_K,
         D_flibe=D_flibe,
         D_nickel=D_nickel,
@@ -371,49 +388,51 @@ def run_once(
     my_model.initialise()
     my_model.run()  # steady state
 
-    # flux_value = _get_flux_value(flux["flux_by_label"]["top_Ni_bottom"])
-    # print("Flux at top_Ni_bottom =", flux_value)
-
-    # flux_value = _get_flux_value(flux["flux_by_label"]["top_Ni_bottom"])
-    # print("top_Ni_bottom flux =", flux_value)
-
     # per-face values (only the six faces)
-    flux_objects = flux["flux_by_label"]  # label -> CylindricalFlux
-    six_labels = flux["six_labels"]  # fixed order of the six faces
-    vals_six = {lbl: _get_flux_value(flux_objects[lbl]) for lbl in six_labels}
-    # print("  Fluxes at six faces:")
-    # print("   ", ", ".join([f"{lbl}: {vals_six[lbl]:.3e}" for lbl in six_labels]))
+    flux_objects = fluxes_dict["flux_by_label"]  # label -> CylindricalFlux
+    six_labels = fluxes_dict["six_labels"]  # fixed order of the six faces
+    vals_six = {label: _get_flux_value(flux_objects[label]) for label in six_labels}
 
     # glovebox (out surface)
-    glovebox_val = float(_get_flux_value(flux["glovebox_flux"]))
+    glovebox_val = float(_get_flux_value(fluxes_dict["glovebox_flux"]))
 
-    # totals: simple sum of their own values (no duplication)
-    up_labels = flux["up_labels"]
-    down_labels = flux["down_labels"]
+    # totals: simple sum of their own values
+    up_labels = fluxes_dict["up_labels"]
+    down_labels = fluxes_dict["down_labels"]
 
-    total_up = float(np.sum([vals_six[lbl] for lbl in up_labels], dtype=float))
-    total_down = float(np.sum([vals_six[lbl] for lbl in down_labels], dtype=float))
+    # sum over the upstream group
+    total_up = float(np.sum([vals_six[label] for label in up_labels], dtype=float))
+    # sum over the downstream group
+    total_down = float(np.sum([vals_six[label] for label in down_labels], dtype=float))
 
-    # per-surface payload (keep backward-compatible keys)
+    display_names = {
+        "top_cap_Ni": "Top cap (Ni)",
+        "top_sidewall_Ni": "Upper Ni sidewall",
+        "liquid_surface": "FLiBe surface",
+        "mid_membrane_Ni": "Middle membrane",
+        "bottom_cap_Ni": "Bottom Ni (top face)",
+        "bottom_sidewall_Ni": "Lower Ni sidewall",
+    }
+
+    # per-surface fluxes
     per_surface = {
         "labels": six_labels,
-        "values": [vals_six[lbl] for lbl in six_labels],
+        "values": [vals_six[label] for label in six_labels],
         "up_labels": up_labels,
         "down_labels": down_labels,
-        "up_names": up_labels,
-        "down_names": down_labels,
-        "up_vals": [vals_six[lbl] for lbl in up_labels],
-        "down_vals": [vals_six[lbl] for lbl in down_labels],
+        "up_names": [display_names[label] for label in up_labels],
+        "down_names": [display_names[label] for label in down_labels],
+        "up_vals": [vals_six[label] for label in up_labels],
+        "down_vals": [vals_six[label] for label in down_labels],
     }
 
     return dict(
-        total_in=total_up,  # sum over the upstream group
-        glovebox=glovebox_val,  # out_surf only
-        total_out=total_down,  # sum over the downstream group
+        total_in=total_up,  
+        glovebox=glovebox_val,  
+        total_out=total_down,  
         balance=total_up + glovebox_val + total_down,
         per_surface=per_surface,
     )
-
 
 # ================== Scheme A: single-pass scaling + Arrhenius smoothing ==================
 kB_eV = 8.617333262e-5  # eV/K
@@ -436,8 +455,8 @@ def _ensure_fig_dir(dirpath: Path) -> None:
     dirpath.mkdir(parents=True, exist_ok=True)
 
 
-def _phi_base_at_T(permeability_flibe, T_K: float) -> float:
-    """Evaluate base FLiBe permeability at temperature T_K."""
+def _phi_guess_at_T(permeability_flibe, T_K: float) -> float:
+    """Evaluate guess FLiBe permeability at temperature T_K."""
     try:
         return float(permeability_flibe.value(T_K).magnitude)
     except Exception:
@@ -446,24 +465,23 @@ def _phi_base_at_T(permeability_flibe, T_K: float) -> float:
         )
 
 
-def _collect_normal_run1_and_swap_points(
+def _collect_points_for_cases(
     cases: Dict,
     T2K: Dict[float, float],
     Y_FT_BY_TEMP_C: Dict[float, float],
+    allowed_case_names: Optional[List[str]] = None,
 ) -> List[CalibPoint]:
     """
-    Build dataset using:
-      - normal_* cases, Run 1 only
-      - swap_*   cases, Run 1 only
-    Each (case, temperature) contributes one point.
+    Build a list of CalibPoint objects from the `cases` configuration.
     """
     pts: List[CalibPoint] = []
     for case_name, cfg in cases.items():
+        if allowed_case_names is not None and case_name not in allowed_case_names:
+            continue
         is_normal = case_name.startswith("normal")
         is_swap = case_name.startswith("swap")
         if not (is_normal or is_swap):
-            continue  # ignore other families if any
-
+            continue
         table = cfg["table"]
         for Tc, row in table.items():
             Tk = T2K[Tc]
@@ -486,11 +504,50 @@ def _collect_normal_run1_and_swap_points(
                 )
             )
     if not pts:
-        raise RuntimeError("No points found for normal_* Run 1 and swap_* Run 1.")
-    # Sort by (case, T) for reproducible logs/plots
+        raise RuntimeError("No calibration points found.")
     pts.sort(key=lambda p: (p.case, p.T_C))
     return pts
 
+def _ensure_fig_dir(p: Path):
+    p.mkdir(parents=True, exist_ok=True)
+
+def _ensure_and_save(fig, path: Path, dpi=220):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+def _arrhenius_str(Phi0: float, E_eV: float, unit="H·m⁻¹·s⁻¹·Pa⁻¹") -> str:
+    """
+    Produce a neat Arrhenius law string for annotation.
+    φ(T) = Φ0 · exp(-E/(k_B T))
+    """
+    return (r"$\varphi(T)$ = "
+            f"{Phi0:.4g} · exp(" +
+            r"$-\dfrac{" + f"{E_eV:.4g}" + r"\ \mathrm{eV}}{k_B T}$" +
+            f")  [{unit}]")
+
+# ---------- figure folders + saving---------
+def _ensure_and_save(fig, out_path: Path) -> None:
+    # ensure parent exists, save, print path for debugging, and close
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=220, bbox_inches="tight")
+    print(f"[saved] {out_path}")
+    plt.close(fig)
+
+
+def save_overview(fig, case: str, name: str = "overview"):
+    out = Path("exports") / "figs" / case / f"{name}.png"
+    _ensure_and_save(fig, out)
+
+
+def fig_saving(case_name: str, T_C: int, run_name: str) -> Path:
+    return Path("exports") / "figs" / "calibration_A" / case_name / f"{T_C}C" / run_name
+
+def save_breakdown(fig, outdir: Path, stem: str):
+    """Save breakdown figure with a stable naming convention."""
+    _ensure_and_save(fig, outdir / f"{stem}.png")
+
+# ==== Calibration + plotting==================================================
 
 def calibrate_phi_schemeA(
     cases: Dict,
@@ -499,43 +556,35 @@ def calibrate_phi_schemeA(
     D_flibe,
     D_nickel,
     K_S_nickel,
-    permeability_flibe_base,
+    permeability_flibe_guess,
     # plotting/output control
     outdir: Path = Path("exports") / "figs" / "calibration_A",
     also_show: bool = False,
+    allowed_case_names: Optional[List[str]] = None,
 ):
     """
-    Scheme A:
-      1) Run the model once with a base permeability (permeability_flibe_base).
-      2) For each point, compute s = J_exp / J_model.
-      3) Define phi_new(T) = s * phi_base(T).
-      4) Fit ln(phi_new) = a + b * (1/T) via linear regression (Arrhenius).
-         Then Phi0 = exp(a), E = -b * kB.
-      5) Re-run with fitted (Phi0, E) for reporting and a parity plot.
-
-    Returns:
-      dict(phi0=..., E=..., r2=..., table=[...])
+    Scheme A (per-case when allowed_case_names is given):
+      1) Run once with guess permeability (permeability_flibe_guess).
+      2) Scale at each point: s = J_exp / J_model; set φ_new(T) = s * φ_guess(T).
+      3) Fit ln φ_new vs 1/T (Arrhenius) -> (Φ0, E).
+      4) Re-run with fitted (Φ0, E); produce a parity plot.
+      5) Write the explicit Arrhenius expression onto the ln-φ plot and parity plot.
+      6) Persist results under a case-scoped folder, tied to the case name.
+      7) Auto-generate per-temperature bar charts (exp vs model in/out + glovebox + six surfaces) using the fitted φ.
     """
+    # Derive case suffix and output folder
+    case_suffix = None if (allowed_case_names is None) else allowed_case_names[0]
+    outdir = outdir if case_suffix is None else (outdir / case_suffix)
     _ensure_fig_dir(outdir)
 
-    # 0) Collect dataset (normal Run 1 + swap Run 1)
-    pts = _collect_normal_run1_and_swap_points(cases, T2K, Y_FT_BY_TEMP_C)
+    # Collect Run 1 points from all/specified cases
+    pts = _collect_points_for_cases(cases, T2K, Y_FT_BY_TEMP_C, allowed_case_names)
 
-    # 1–2) Single-pass scaling per (case, T)
-    # For each point: run model with base permeability, compute s and phi_new(T)
-    ln_phi_new_list = []
-    invT_list = []
-    rows = []  # for logging/report
+    ln_phi_new_list, invT_list, rows = [], [], []
 
+    # 1–2) Single-pass scaling using the guess permeability
     for p in pts:
-        # Build boundary condition for this point
-        out_bc = (
-            {"type": "sieverts", "pressure": p.P_gb}
-            if p.P_gb is not None
-            else {"type": "particle_flux_zero"}
-        )
-
-        # Evaluate model flux using the base permeability
+        out_bc = {"type": "sieverts", "pressure": p.P_gb} if p.P_gb is not None else {"type": "particle_flux_zero"}
         out = run_once(
             case=p.case,
             T_K=p.T_K,
@@ -543,7 +592,7 @@ def calibrate_phi_schemeA(
             P_down=p.P_down,
             D_flibe=D_flibe,
             D_nickel=D_nickel,
-            permeability_flibe=permeability_flibe_base,
+            permeability_flibe=permeability_flibe_guess,
             K_S_nickel=K_S_nickel,
             out_bc=out_bc,
             y_ft=p.y_ft,
@@ -553,21 +602,20 @@ def calibrate_phi_schemeA(
         J_exp = max(float(p.J_exp), eps)
 
         s = J_exp / J_model
-        phi_base_T = _phi_base_at_T(permeability_flibe_base, p.T_K)
-        phi_new_T = max(s * phi_base_T, eps)
+        phi_guess_T = _phi_guess_at_T(permeability_flibe_guess, p.T_K)
+        phi_new_T = max(s * phi_guess_T, eps)
 
         ln_phi_new_list.append(math.log(phi_new_T))
         invT_list.append(1.0 / p.T_K)
-
         rows.append(
             {
                 "case": p.case,
                 "T_C": p.T_C,
                 "run": p.run,
-                "J_model_base": J_model,
+                "J_guess": J_model,
                 "J_exp": J_exp,
                 "scale_s": s,
-                "phi_base_T": phi_base_T,
+                "phi_guess_T": phi_guess_T,
                 "phi_new_T": phi_new_T,
             }
         )
@@ -575,41 +623,32 @@ def calibrate_phi_schemeA(
     ln_phi_new = np.array(ln_phi_new_list, dtype=float)
     invT = np.array(invT_list, dtype=float)
 
-    # 3–4) Arrhenius linear regression: ln(phi) = a + b*(1/T)
-    # => Phi0 = exp(a), E = -b * kB
-    # Use ordinary least squares via numpy.polyfit
-    b, a = np.polyfit(
-        invT, ln_phi_new, deg=1
-    )  # returns [slope, intercept] for y ≈ b*x + a
+    # 3) Arrhenius fit in ln-space:  ln φ = a + b * (1/T)
+    b, a = np.polyfit(invT, ln_phi_new, deg=1)
     Phi0_hat = float(math.exp(a))
-    E_hat = float(-b * kB_eV)
+    E_hat = float(-b * kB_eV)  # keep unit convention
 
-    # Optional goodness-of-fit (R^2) in ln-space
+    # simple R^2 in ln-space
     y_pred = b * invT + a
     ss_res = float(np.sum((ln_phi_new - y_pred) ** 2))
     ss_tot = float(np.sum((ln_phi_new - float(np.mean(ln_phi_new))) ** 2))
     R2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
     print("\n[Scheme A] Fitted Arrhenius parameters from scaled points:")
-    print(f"  Phi0 = {Phi0_hat:.3e}\n")
-    print(f"  E    = {E_hat:.4f} eV\n")
-    print(f"  R^2  = {R2:.4f} (fit in ln(phi) vs 1/T)\n")
+    print(f"  Phi0 = {Phi0_hat:.4e}")
+    print(f"  E    = {E_hat:.4f} eV")
+    print(f"  R^2  = {R2:.4f} (fit in ln(phi) vs 1/T)")
 
-    # 5) Re-run with fitted permeability for reporting and parity plot
+
+    # 4) Validation with fitted permeability + parity plot
     perm_fitted = htm.Permeability(pre_exp=Phi0_hat, act_energy=E_hat, law="henry")
 
     print("\n[Scheme A] Validation with fitted (Phi0, E):")
-    print(
-        "Case | T[°C] | Run |   J_model_fit [H/s]   |    J_exp [H/s]     |  log10 err"
-    )
+    print("Case | T[°C] | Run |   J_model_fit [H/s]   |    J_exp [H/s]     |  log10 err")
     jm_fit_list, je_list, labels = [], [], []
 
     for p in pts:
-        out_bc = (
-            {"type": "sieverts", "pressure": p.P_gb}
-            if p.P_gb is not None
-            else {"type": "particle_flux_zero"}
-        )
+        out_bc = {"type": "sieverts", "pressure": p.P_gb} if p.P_gb is not None else {"type": "particle_flux_zero"}
         out = run_once(
             case=p.case,
             T_K=p.T_K,
@@ -629,47 +668,61 @@ def calibrate_phi_schemeA(
         je_list.append(je)
         labels.append(f"{p.case}@{int(p.T_C)}°C")
         rlog = math.log10(jm) - math.log10(je)
-        print(
-            f"{p.case:<18} | {int(p.T_C):>5} | {p.run:<4} | {jm:>20.3e} | {je:>18.3e} | {rlog:>9.3f}"
-        )
+        print(f"{p.case:<18} | {int(p.T_C):>5} | {p.run:<4} | {jm:>20.3e} | {je:>18.3e} | {rlog:>9.3f}")
 
-    # ---------- Plots (saved to disk, optional show) ----------
-    # 1) ln(phi_new) vs 1/T with fitted line
+    # --------- Plots (save; only show at the very end) ---------
     _ensure_fig_dir(outdir)
-    fig1, ax1 = plt.subplots(figsize=(6.2, 4.6))
+    title_suffix = " (all)" if case_suffix is None else f" ({case_suffix})"
+
+    # ln(phi_new) vs 1/T with explicit formula annotation
+    fig1, ax1 = plt.subplots(figsize=(6.6, 4.8))
     ax1.scatter(invT, ln_phi_new, label="Scaled points (ln φ_new)", zorder=3)
-    x_sorted_idx = np.argsort(invT)
-    x_line = invT[x_sorted_idx]
-    y_line = y_pred[x_sorted_idx]
-    ax1.plot(x_line, y_line, label="Linear fit", linestyle="--")
+    order = np.argsort(invT)
+    ax1.plot(invT[order], y_pred[order], linestyle="--", label="Linear fit")
     ax1.set_xlabel("1 / T  [1/K]")
     ax1.set_ylabel("ln φ  [ln(H·m⁻¹·s⁻¹·Pa⁻¹)]")
-    ax1.set_title("Scheme A: ln(φ_new) vs 1/T (normal Run1 + swap Run1)")
+    expr_line = _arrhenius_str(Phi0_hat, E_hat)
+    fig1.suptitle(expr_line + f"   $R^2={R2:.4f}$", y=0.98, fontsize=10)
+    fig1.tight_layout(rect=[0, 0, 1, 0.95])
+    ax1.set_title("Scheme A: ln(φ_new) vs 1/T" + title_suffix)
     ax1.grid(True, alpha=0.3)
     ax1.legend()
     fig1.tight_layout()
-    fig1.savefig(outdir / "schemeA_lnphi_vs_invT.png", dpi=300, bbox_inches="tight")
+    _ensure_and_save(fig1, outdir / "schemeA_lnphi_vs_invT.png")
 
-    # 2) Parity plot: J_model(fitted) vs J_exp
+    # Parity plot (experimental vs model with fitted permeability)
     jm_arr = np.array(jm_fit_list, dtype=float)
     je_arr = np.array(je_list, dtype=float)
     lo = float(min(jm_arr.min(), je_arr.min()))
     hi = float(max(jm_arr.max(), je_arr.max()))
-    fig2, ax2 = plt.subplots(figsize=(5.8, 5.8))
+    fig2, ax2 = plt.subplots(figsize=(6.0, 6.0))
     ax2.scatter(je_arr, jm_arr)
     ax2.plot([lo, hi], [lo, hi], linestyle="--")
     ax2.set_xscale("log")
     ax2.set_yscale("log")
     ax2.set_xlabel("Experimental flux  J_exp [H/s]")
     ax2.set_ylabel("Model flux (fitted) J_model [H/s]")
-    ax2.set_title("Scheme A: Parity (normal Run1 + swap Run1)")
-    # annotate points
+    ax2.set_title("Scheme A: Parity" + title_suffix)
+    fig2.suptitle(expr_line, y=0.98, fontsize=10)
+    fig2.tight_layout(rect=[0, 0, 1, 0.95])
     for x, y, lab in zip(je_arr, jm_arr, labels):
         ax2.text(x, y, lab, fontsize=8)
     fig2.tight_layout()
-    fig2.savefig(outdir / "schemeA_parity.png", dpi=300, bbox_inches="tight")
+    _ensure_and_save(fig2, outdir / "schemeA_parity.png")
 
-    # Optional show (will do nothing on headless Agg)
+    # 7) Auto-generate bar charts for case using the fitted permeability
+    if case_suffix is not None:
+        case_cfg = cases[case_suffix]
+        plot_case_breakdowns_with_exp(
+            case_name=case_suffix,
+            case_cfg=case_cfg,
+            T2K=T2K,
+            Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
+            D_flibe=D_flibe,
+            permeability_flibe_fitted=perm_fitted,
+            outdir_root=outdir.parent if outdir.name == case_suffix else outdir.parent,  # keep same root
+        )
+
     if also_show and "agg" not in matplotlib.get_backend().lower():
         plt.show()
 
@@ -677,11 +730,172 @@ def calibrate_phi_schemeA(
         "phi0": Phi0_hat,
         "E": E_hat,
         "R2": R2,
-        "points": rows,  # list of dicts for per-point diagnostics
+        "points": rows,
         "fig_dir": str(outdir),
+        "permeability": perm_fitted,  # fitted curve for downstream use
     }
 
-    # ================== End Scheme A block ==================
+
+def calibrate_phi_all_cases(
+    cases: Dict,
+    T2K: Dict[float, float],
+    Y_FT_BY_TEMP_C: Dict[float, float],
+    D_flibe,
+    D_nickel,
+    K_S_nickel,
+    permeability_flibe_guess,
+    outdir_root: Path = Path("exports") / "figs" / "calibration_A",
+) -> Dict[str, dict]:
+    """
+    Calibrate (Φ0, E) for each case separately (Run 1 only).
+    Outputs are written to: outdir_root/<case_name>/...
+    Returns {case_name: result_dict}, where result_dict contains the fitted permeability.
+    """
+    results: Dict[str, dict] = {}
+    for case_name in cases.keys():
+        res = calibrate_phi_schemeA(
+            cases=cases,
+            T2K=T2K,
+            Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
+            D_flibe=D_flibe,
+            D_nickel=D_nickel,
+            K_S_nickel=K_S_nickel,
+            permeability_flibe_guess=permeability_flibe_guess,
+            outdir=outdir_root,
+            also_show=False,
+            allowed_case_names=[case_name],  # per-case fit
+        )
+        results[case_name] = res
+    return results
+
+
+def plot_case_breakdowns_with_exp(
+    case_name: str,
+    case_cfg: Dict,
+    T2K: Dict[float, float],
+    Y_FT_BY_TEMP_C: Dict[float, float],
+    D_flibe,
+    permeability_flibe_fitted,
+    outdir_root: Path = Path("exports") / "figs" / "calibration_A",
+):
+    """
+    For a single case, loop over its temperatures and runs; re-run with the
+    case-specific fitted permeability and produce a bar chart comparing:
+      - Flux exp (J_exp)
+      - Flux in  (total_in)
+      - Flux out (total_out)
+      - Glovebox flux (glovebox)
+      - Per-surface fluxes (six faces, in per_surface['labels'] order)
+
+    Each bar is annotated with its numeric value. The figure also displays
+    the current temperature, y_ft, and the boundary-condition parameters used.
+
+    Keep numeric labels above every bar.
+    """
+    table = case_cfg.get("table", {})
+    case_outdir = outdir_root / case_name
+    _ensure_fig_dir(case_outdir)
+
+    for Tc in sorted(table.keys()):
+        Tk = T2K[Tc]
+        y_ft_val = Y_FT_BY_TEMP_C.get(Tc, list(Y_FT_BY_TEMP_C.values())[-1])
+
+        runs = table[Tc].get("runs", {})
+        for run_name, cond in runs.items():
+            out_bc = (
+                {"type": "sieverts", "pressure": float(cond.get("P_gb", 0.0))}
+                if "P_gb" in cond
+                else {"type": "particle_flux_zero"}
+            )
+
+            res = run_once(
+                case=case_name,
+                T_K=Tk,
+                P_up=float(cond["P_up"]),
+                P_down=float(cond["P_down"]),
+                D_flibe=D_flibe,
+                D_nickel=D_nickel,
+                K_S_nickel=K_S_nickel,
+                permeability_flibe=permeability_flibe_fitted,
+                out_bc=out_bc,
+                y_ft=float(y_ft_val),
+            )
+
+            # Pack bar labels/values: [exp, in, out] + six surfaces
+            per = res["per_surface"]
+            six_labels = per["labels"]
+            six_values = [float(v) for v in per["values"]]
+            values = [float(cond["J_exp"]), float(res["total_in"]), float(res["total_out"]), float(res["glovebox"]),] + six_values
+            labels = ["Flux exp", "Flux in", "Flux out", "Glovebox"] + list(six_labels)
+
+            fig, ax = plt.subplots(figsize=(13, 6))
+            x = np.arange(len(labels), dtype=float)
+            bars = ax.bar(x, np.abs(values))
+
+            # annotate numerics on top of bars
+            for bar, v in zip(bars, values):
+                h = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    (h if h > 0 else 0.0) * 1.02 + (1e-30 if h == 0 else 0),  # keep text above even if tiny
+                    f"{v:.2e}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels, rotation=25, ha="right")
+            ax.set_ylabel("Flux [H/s]")
+            ax.set_title(f"{case_name} — {run_name} — {int(Tc)} °C  (y_ft={float(y_ft_val):.5f} m)")
+
+            # explicit conditions box
+            info = (
+                f"Case: {case_name}\nRun: {run_name}\n"
+                f"T = {int(Tc)} °C (T_K={Tk:.2f})\n"
+                f"y_ft = {float(y_ft_val):.5f} m\n"
+                f"P_up = {float(cond['P_up']):.2e} Pa\n"
+                f"P_down = {float(cond['P_down']):.2e} Pa\n"
+                f"P_glovebox = {float(cond['P_gb']):.2e} Pa"
+                if "P_gb" in cond
+                else f"Case: {case_name}\nRun: {run_name}\n"
+                     f"T = {int(Tc)} °C (T_K={Tk:.2f})\n"
+                     f"y_ft = {float(y_ft_val):.5f} m\n"
+                     f"P_up = {float(cond['P_up']):.2e} Pa\n"
+                     f"P_down = {float(cond['P_down']):.2e} Pa\n"
+                     f"P_glovebox = (closed)"
+            )
+            ax.text(
+                0.99, 0.98, info,
+                transform=ax.transAxes, ha="right", va="top",
+                bbox=dict(boxstyle="round", fc="white", alpha=0.85, lw=0.5),
+            )
+            ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
+            fig.tight_layout()
+
+            fd = fig_saving(case_name, int(Tc), run_name)
+            save_breakdown(fig, fd, stem=f"{case_name}_{int(Tc)}C_{run_name}_breakdown_exp_vs_model")
+
+
+def plot_flux_breakdown(
+    case_name: str,
+    case_cfg: Dict,
+    T2K: Dict[float, float],
+    Y_FT_BY_TEMP_C: Dict[float, float],
+    D_flibe,
+    permeability_flibe_fitted,
+    outdir_root: Path = Path("exports") / "figs" / "calibration_A",
+):
+    """Compatibility wrapper: old name -> new implementation."""
+    return plot_case_breakdowns_with_exp(
+        case_name=case_name,
+        case_cfg=case_cfg,
+        T2K=T2K,
+        Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
+        D_flibe=D_flibe,
+        permeability_flibe_fitted=permeability_flibe_fitted,
+        outdir_root=outdir_root,
+    )
 
 
 # ----------------------- main -----------------------
@@ -701,7 +915,6 @@ if __name__ == "__main__":
 
     # Temperatures and K conversion
     temps_C_all = [500.0, 550.0, 600.0, 650.0, 700.0]
-    # temps_C_all = [500.0]
     T2K = {Tc: Tc + 273.15 for Tc in temps_C_all}
 
     # temperature-dependent FLiBe thickness [m]
@@ -888,9 +1101,10 @@ if __name__ == "__main__":
         },
     }
 
+   # Although the code is designed to process all four cases at once, possibly due to MPI memory issues (not fully confirmed), it is safer to run only one case at a time.
     cases = {
         # "normal_infinite": {"table": normal_infinite, "out_mode": "particle_flux_zero"},
-        "normal_transparent": {"table": normal_transparent, "out_mode": "sieverts"},
+        # "normal_transparent": {"table": normal_transparent, "out_mode": "sieverts"},
         # "swap_infinite": {"table": swap_infinite, "out_mode": "particle_flux_zero"},
         "swap_transparent": {"table": swap_transparent, "out_mode": "sieverts"},
     }
@@ -905,11 +1119,26 @@ if __name__ == "__main__":
                 * np.exp(-permeability_flibe.act_energy / (kB_eV * T_K))
             )
 
+    # ==================== PER-CASE CALIBRATION (each case its own Φ) ====================
+    result_by_case = calibrate_phi_all_cases(
+        cases=cases,
+        T2K=T2K,
+        Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
+        D_flibe=D_flibe,
+        D_nickel=D_nickel,
+        K_S_nickel=K_S_nickel,
+        permeability_flibe_guess=permeability_flibe,
+        outdir_root=Path("exports") / "figs" / "calibration_A",
+    )
+    print("Per-case fitted parameters:")
+    for k, v in result_by_case.items():
+        print(k, {kk: v[kk] for kk in ("phi0", "E", "R2", "fig_dir")})
+
     # ==================== RUN ALL CASES & COLLECT ====================
     all_results = {}  # case -> Tc -> run -> {model, exp, conds}
     case_summaries = {}  # arrays for overview plots
-
     for case_name, cfg in cases.items():
+        perm_use = result_by_case.get(case_name, {}).get("permeability", permeability_flibe)
         table = cfg["table"]
         out_mode = cfg["out_mode"]
 
@@ -955,7 +1184,7 @@ if __name__ == "__main__":
                     P_down=P_down,
                     D_flibe=D_flibe,
                     D_nickel=D_nickel,
-                    permeability_flibe=permeability_flibe,
+                    permeability_flibe=perm_use,
                     K_S_nickel=K_S_nickel,
                     out_bc=out_bc,
                     y_ft=y_ft_val,
@@ -1003,33 +1232,21 @@ if __name__ == "__main__":
         Simple Ni permeability Φ(T). Default: Φ = D * K_S  (Sieverts side).
         """
         kB_eV = 8.617333262e-5
-
-        # D_Ni(T)
         try:
             D_val = float(D_nickel.value(T_K).magnitude)
         except Exception:
             D_val = float(D_nickel.pre_exp) * np.exp(
                 -float(D_nickel.act_energy) / (kB_eV * T_K)
             )
-
-        # K_S_Ni(T)
         try:
             Ks_val = float(K_S_nickel.value(T_K).magnitude)
         except Exception:
             Ks_val = float(K_S_nickel.pre_exp) * np.exp(
                 -float(K_S_nickel.act_energy) / (kB_eV * T_K)
             )
-
         return D_val * Ks_val
 
-    # print("\n=== Overview plots ===")
-    # print(f"{pi_ni_at_T(773.15):.2e}")
-    # print(f"{pi_ni_at_T(823.15):.2e}")
-    # print(f"{pi_ni_at_T(873.15):.2e}")
-    # print(f"{pi_ni_at_T(923.15):.2e}")
-    # print(f"{pi_ni_at_T(973.15):.2e}")
-
-    # ==================== OVERVIEW: 4 CASES FIRST ====================
+    # ==================== OVERVIEW: per-case model vs exp ====================
     for case_name, summary in case_summaries.items():
         run_names = summary["run_names"]
         totals_by_run = summary["totals_by_run"]
@@ -1044,9 +1261,7 @@ if __name__ == "__main__":
         figA, axA = plt.subplots(figsize=(13, 6))
         shifts = np.linspace(-group_w / 2 + w, group_w / 2 - w, len(run_names))
 
-        # draw bars + annotate each bar with its numeric value
         for s, r in zip(shifts, run_names):
-            # experimental bars (hollow)
             bars_exp = axA.bar(
                 x + s - w / 2,
                 exp_by_run[r],
@@ -1055,16 +1270,13 @@ if __name__ == "__main__":
                 edgecolor="black",
                 fill=False,
             )
-            # model bars (filled)
             bars_mod = axA.bar(
                 x + s + w / 2,
                 totals_by_run[r],
                 width=w,
                 label=f"Model {r}",
             )
-
-            # annotate values on each bar
-            def _annotate(container, values):
+            def _annot(container, values):
                 for rect, val in zip(container, values):
                     if np.isnan(val):
                         continue
@@ -1075,13 +1287,10 @@ if __name__ == "__main__":
                         ha="center",
                         va="bottom",
                         fontsize=9,
-                        rotation=0,
                     )
+            _annot(bars_exp, exp_by_run[r])
+            _annot(bars_mod, totals_by_run[r])
 
-            _annotate(bars_exp, exp_by_run[r])
-            _annotate(bars_mod, totals_by_run[r])
-
-        # x tick labels with FLiBe permeability Φ and Ni permeability Π_Ni
         xticklabels = []
         for T in xticks:
             Tk = T2K[T]
@@ -1089,8 +1298,7 @@ if __name__ == "__main__":
             pi_ni = pi_ni_at_T(Tk)
             yft = Y_FT_BY_TEMP_C.get(T, np.nan)
             xticklabels.append(
-                f"{int(T)}°C\nΦ_FLiBe={phi_flibe:.2e}\nΦ_Ni={pi_ni:.2e}\n"
-                f"y_ft={yft:.5f} m"
+                f"{int(T)}°C\nΦ_FLiBe={phi_flibe:.2e}\nΦ_Ni={pi_ni:.2e}\n" f"y_ft={yft:.5f} m"
             )
 
         axA.set_xticks(x)
@@ -1100,126 +1308,9 @@ if __name__ == "__main__":
         axA.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
         axA.legend(ncol=max(2, len(run_names)))
         figA.tight_layout()
-        save_overview(figA, case_name, name="overview")
-        plt.show()  # popup
+        save_overview(figA, case_name, name="overview")  # prints path and closes
 
-    # Use your current base permeability as the starting curve
-    result_A = calibrate_phi_schemeA(
-        cases=cases,
-        T2K=T2K,
-        Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
-        D_flibe=D_flibe,
-        D_nickel=D_nickel,
-        K_S_nickel=K_S_nickel,
-        permeability_flibe_base=permeability_flibe,
-        outdir=Path("exports") / "figs" / "calibration_A",
-        also_show=False,  # set True if you have a GUI backend
-    )
-    print("Scheme A fitted parameters:", result_A)
 
-    # print("\n=== Permeability sensitivity test ===")
-    # # Sensitivity test: vary permeability pre-exponential by factors of 0.5, 1.0, 2.0
-    # # Expect linear scaling of output flux J
-    # factors = [0.5, 1.0, 2.0]
-    # Js = []
-    # for k in factors:
-    #     perm = htm.Permeability(
-    #         pre_exp=permeability_flibe.pre_exp * k,
-    #         act_energy=permeability_flibe.act_energy,
-    #         law="henry",
-    #     )
-    #     out = run_once(
-    #         case="normal_transparent",  # pick any one case/temp to test
-    #         T_K=823.15,  # e.g. 550°C
-    #         P_up=1.10e5,
-    #         P_down=7.10,
-    #         D_flibe=D_flibe,
-    #         D_nickel=D_nickel,
-    #         permeability_flibe=perm,
-    #         K_S_nickel=K_S_nickel,
-    #         out_bc={"type": "sieverts", "pressure": 5.0},
-    #         y_ft=0.02919,
-    #     )
-    #     Js.append(out["total_out"])
-
-    # print("J ratios:", [Js[i] / Js[1] for i in range(len(factors))])
-    # Expect roughly [0.5, 1.0, 2.0]
-
-    # If you want to immediately use the fitted curve in subsequent runs:
-    # permeability_flibe = htm.Permeability(pre_exp=result_A["phi0"], act_energy=result_A["E"], law="henry")
-
-    # # ==================== THEN: PER-TEMPERATURE BREAKDOWNS ====================
-    # for case_name, per_case in all_results.items():
-    #     for Tc in sorted(per_case.keys()):
-    #         for r, pack in per_case[Tc].items():
-    #             res = pack["model"]
-    #             per = res["per_surface"]
-    #             up_names = per["up_names"]
-    #             down_names = per["down_names"]
-    #             up_vals = per["up_vals"]
-    #             down_vals = per["down_vals"]
-
-    #             labels = (
-    #                 ["Flux in (total)", "Flux to glovebox", "Flux out (total)"]
-    #                 + [f"in:{n}" for n in up_names]
-    #                 + [f"out:{n}" for n in down_names]
-    #             )
-    #             values = (
-    #                 [res["total_in"], res["glovebox"], res["total_out"]]
-    #                 + up_vals
-    #                 + down_vals
-    #             )
-
-    #             figB, axB = plt.subplots(figsize=(12, 5.5))
-    #             xB = np.arange(len(labels), dtype=float)
-    #             bars = axB.bar(xB, np.abs(values))
-    #             for bar, v in zip(bars, values):
-    #                 axB.text(
-    #                     bar.get_x() + bar.get_width() / 2.0,
-    #                     bar.get_height() * 1.02 if bar.get_height() > 0 else 1.0,
-    #                     f"{v:.2e}",
-    #                     ha="center",
-    #                     va="bottom",
-    #                     fontsize=9,
-    #                 )
-
-    #             axB.set_xticks(xB)
-    #             axB.set_xticklabels(labels, rotation=30, ha="right")
-    #             axB.set_ylabel("Flux [H/s]")
-
-    #             conds = pack["conds"]
-    #             title = (
-    #                 f"{case_name} — {r} — {int(Tc)} °C  "
-    #                 f"(Φ={conds['phi']:.2e}, y_ft={conds['y_ft']:.5f} m)"
-    #             )
-    #             axB.set_title(title)
-
-    #             # explicit experimental conditions on the figure
-    #             txt = (
-    #                 f"Case: {conds['case']}\nRun: {conds['run']}\n"
-    #                 f"T = {int(conds['T_C'])} °C\n"
-    #                 f"P_up = {conds['P_up']:.2e} Pa\n"
-    #                 f"P_down = {conds['P_down']:.2e} Pa\n"
-    #                 f"P_glovebox = {conds['P_gb']:.2e} Pa"
-    #                 if conds["P_gb"] is not None
-    #                 else f"Case: {conds['case']}\nRun: {conds['run']}\n"
-    #                 f"T = {int(conds['T_C'])} °C\n"
-    #                 f"P_up = {conds['P_up']:.2e} Pa\n"
-    #                 f"P_down = {conds['P_down']:.2e} Pa\n"
-    #                 f"P_glovebox = (closed)"
-    #             )
-    #             axB.text(
-    #                 0.99,
-    #                 0.98,
-    #                 txt,
-    #                 transform=axB.transAxes,
-    #                 ha="right",
-    #                 va="top",
-    #                 bbox=dict(boxstyle="round", fc="white", alpha=0.8, lw=0.5),
-    #             )
-    #             axB.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
-    #             figB.tight_layout()
-
-    #             fd = fig_dir_for(case_name, int(Tc), r)
-    #             save_breakdown(figB, fd, stem=f"{case_name}_{int(Tc)}C_{r}_breakdown")
-    #             plt.show()  # popup for each run/temperature
+    # finally, pop all windows *once* (if not headless/agg)
+    if (not _DEFER_SHOW) and ("agg" not in matplotlib.get_backend().lower()):
+        plt.show()
