@@ -542,7 +542,7 @@ def save_breakdown(fig, outdir: Path, stem: str):
     """Save breakdown figure with a stable naming convention."""
     _ensure_and_save(fig, outdir / f"{stem}.png")
 
-# ==== Calibration + plotting==================================================
+# ------------------ Scheme A with nonlinearity correction ------------------
 
 def calibrate_phi_schemeA(
     cases: Dict,
@@ -556,41 +556,33 @@ def calibrate_phi_schemeA(
     outdir: Path = Path("exports") / "figs" / "calibration_A",
     also_show: bool = False,
     allowed_case_names: Optional[List[str]] = None,
+    correction_iters: int = 1,     # <- number of nonlinear correction passes
+    correction_blend: float = 1.0  # <- 1.0 = full update; <1.0 = damped update
 ):
     """
     Scheme A (per-case when allowed_case_names is given):
-      1) Run once with guess permeability (permeability_flibe_guess).
-      2) Scale at each point: s = J_exp / J_model; set φ_new(T) = s * φ_guess(T).
-      3) Fit ln φ_new vs 1/T (Arrhenius) -> (Φ0, E).
-      4) Re-run with fitted (Φ0, E); produce a parity plot.
-      5) Write the explicit Arrhenius expression onto the ln-φ plot and parity plot.
-      6) Persist results under a case-scoped folder, tied to the case name.
-      7) Auto-generate per-temperature bar charts (exp vs model in/out + glovebox + six surfaces) using the fitted φ.
+      1) Single-pass scaling with guess φ_guess(T) to build (ln φ_new, 1/T) points.
+      2) Linear fit in ln-space -> (Φ0_hat, E_hat).
+      3) Nonlinear correction: re-run with fitted (Φ0_hat, E_hat), re-scale, and re-fit.
+         Repeat for 'correction_iters' times with optional damping ('correction_blend').
+      4) Validate with final (Φ0, E): parity plot and bar plots.
     """
-    # Derive case suffix and output folder
     case_suffix = None if (allowed_case_names is None) else allowed_case_names[0]
     outdir = outdir if case_suffix is None else (outdir / case_suffix)
     _ensure_fig_dir(outdir)
 
-    # Collect Run 1 points from all/specified cases
+    # Gather calibration points
     pts = _collect_points_for_cases(cases, T2K, Y_FT_BY_TEMP_C, allowed_case_names)
 
+    # ---------- First pass: scale-to-ratio using φ_guess ----------
     ln_phi_new_list, invT_list, rows = [], [], []
-
-    # 1–2) Single-pass scaling using the guess permeability
     for p in pts:
         out_bc = {"type": "sieverts", "pressure": p.P_gb} if p.P_gb is not None else {"type": "particle_flux_zero"}
         out = run_once(
-            case=p.case,
-            T_K=p.T_K,
-            P_up=p.P_up,
-            P_down=p.P_down,
-            D_flibe=D_flibe,
-            D_nickel=D_nickel,
+            case=p.case, T_K=p.T_K, P_up=p.P_up, P_down=p.P_down,
+            D_flibe=D_flibe, D_nickel=D_nickel,
             permeability_flibe=permeability_flibe_guess,
-            K_S_nickel=K_S_nickel,
-            out_bc=out_bc,
-            y_ft=p.y_ft,
+            K_S_nickel=K_S_nickel, out_bc=out_bc, y_ft=p.y_ft,
         )
         eps = np.finfo(float).tiny
         J_model = max(float(out["total_out"]), eps)
@@ -618,24 +610,60 @@ def calibrate_phi_schemeA(
     ln_phi_new = np.array(ln_phi_new_list, dtype=float)
     invT = np.array(invT_list, dtype=float)
 
-    # 3) Arrhenius fit in ln-space:  ln φ = a + b * (1/T)
+    # Linear fit in ln-space: ln φ = a + b (1/T)
     b, a = np.polyfit(invT, ln_phi_new, deg=1)
     Phi0_hat = float(math.exp(a))
-    E_hat = float(-b * kB_eV)  # keep unit convention
+    E_hat = float(-b * kB_eV)
 
-    # simple R^2 in ln-space
     y_pred = b * invT + a
     ss_res = float(np.sum((ln_phi_new - y_pred) ** 2))
     ss_tot = float(np.sum((ln_phi_new - float(np.mean(ln_phi_new))) ** 2))
     R2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
-    print("\n[Scheme A] Fitted Arrhenius parameters from scaled points:")
+    print("\n[Scheme A] First-pass Arrhenius from scaled points:")
     print(f"  Phi0 = {Phi0_hat:.4e}")
     print(f"  E    = {E_hat:.4f} eV")
-    print(f"  R^2  = {R2:.4f} (fit in ln(phi) vs 1/T)")
+    print(f"  R^2  = {R2:.4f} (ln-space)")
 
+    # ---------- Nonlinear correction passes ----------
+    # Each pass: use current (Phi0_hat, E_hat) -> rerun -> rescale -> refit
+    for it in range(max(0, int(correction_iters))):
+        perm_curr = htm.Permeability(pre_exp=Phi0_hat, act_energy=E_hat, law="henry")
+        ln_phi_corr, invT_corr = [], []
 
-    # 4) Validation with fitted permeability + parity plot
+        for p in pts:
+            out_bc = {"type": "sieverts", "pressure": p.P_gb} if p.P_gb is not None else {"type": "particle_flux_zero"}
+            out = run_once(
+                case=p.case, T_K=p.T_K, P_up=p.P_up, P_down=p.P_down,
+                D_flibe=D_flibe, D_nickel=D_nickel,
+                permeability_flibe=perm_curr, K_S_nickel=K_S_nickel,
+                out_bc=out_bc, y_ft=p.y_ft,
+            )
+            eps = np.finfo(float).tiny
+            Jm = max(float(out["total_out"]), eps)
+            Je = max(float(p.J_exp), eps)
+
+            # Scale current fitted φ by the new ratio s2
+            s2 = Je / Jm
+            phi_fit_T = float(Phi0_hat) * math.exp(-float(E_hat) / (kB_eV * float(p.T_K)))
+            phi_new_corr = max(s2 * phi_fit_T, eps)
+
+            ln_phi_corr.append(math.log(phi_new_corr))
+            invT_corr.append(1.0 / p.T_K)
+
+        ln_phi_corr = np.asarray(ln_phi_corr, dtype=float)
+        invT_corr = np.asarray(invT_corr, dtype=float)
+        b2, a2 = np.polyfit(invT_corr, ln_phi_corr, deg=1)
+        Phi0_new = float(math.exp(a2))
+        E_new = float(-b2 * kB_eV)
+
+        # Optional damping to avoid oscillation
+        Phi0_hat = float((1.0 - correction_blend) * Phi0_hat + correction_blend * Phi0_new)
+        E_hat    = float((1.0 - correction_blend) * E_hat    + correction_blend * E_new)
+
+        print(f"[Scheme A] Correction iter {it+1}: Phi0={Phi0_hat:.4e}, E={E_hat:.4f} eV")
+
+    # ---------- Validation with final (Phi0_hat, E_hat) ----------
     perm_fitted = htm.Permeability(pre_exp=Phi0_hat, act_energy=E_hat, law="henry")
 
     print("\n[Scheme A] Validation with fitted (Phi0, E):")
@@ -669,11 +697,11 @@ def calibrate_phi_schemeA(
     _ensure_fig_dir(outdir)
     title_suffix = " (all)" if case_suffix is None else f" ({case_suffix})"
 
-    # ln(phi_new) vs 1/T with explicit formula annotation
+    # ln(phi_new) vs 1/T from the first pass (for record)
     fig1, ax1 = plt.subplots(figsize=(6.6, 4.8))
     ax1.scatter(invT, ln_phi_new, label="Scaled points (ln φ_new)", zorder=3)
     order = np.argsort(invT)
-    ax1.plot(invT[order], y_pred[order], linestyle="--", label="Linear fit")
+    ax1.plot(invT[order], (b * invT + a)[order], linestyle="--", label="Linear fit (1st)")
     ax1.set_xlabel("1 / T  [1/K]")
     ax1.set_ylabel("ln φ  [ln(H·m⁻¹·s⁻¹·Pa⁻¹)]")
     expr_line = _arrhenius_str(Phi0_hat, E_hat)
@@ -685,7 +713,7 @@ def calibrate_phi_schemeA(
     fig1.tight_layout()
     _ensure_and_save(fig1, outdir / "schemeA_lnphi_vs_invT.png")
 
-    # Parity plot (experimental vs model with fitted permeability)
+    # Parity (final fitted parameters)
     jm_arr = np.array(jm_fit_list, dtype=float)
     je_arr = np.array(je_list, dtype=float)
     lo = float(min(jm_arr.min(), je_arr.min()))
@@ -705,7 +733,7 @@ def calibrate_phi_schemeA(
     fig2.tight_layout()
     _ensure_and_save(fig2, outdir / "schemeA_parity.png")
 
-    # 7) Auto-generate bar charts for case using the fitted permeability
+    # Bar charts for the specific case (if per-case mode)
     if case_suffix is not None:
         case_cfg = cases[case_suffix]
         plot_case_breakdowns_with_exp(
@@ -715,7 +743,7 @@ def calibrate_phi_schemeA(
             Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
             D_flibe=D_flibe,
             permeability_flibe_fitted=perm_fitted,
-            outdir_root=outdir.parent if outdir.name == case_suffix else outdir.parent,  # keep same root
+            outdir_root=outdir.parent if outdir.name == case_suffix else outdir.parent,
         )
 
     if also_show and "agg" not in matplotlib.get_backend().lower():
@@ -724,12 +752,14 @@ def calibrate_phi_schemeA(
     return {
         "phi0": Phi0_hat,
         "E": E_hat,
-        "R2": R2,
+        "R2": R2,  # R^2 from first ln-fit (kept for continuity)
         "points": rows,
         "fig_dir": str(outdir),
-        "permeability": perm_fitted,  # fitted curve for downstream use
+        "permeability": perm_fitted,
     }
 
+
+# ------------------ multi-case wrappers & plotting ------------------
 
 def calibrate_phi_all_cases(
     cases: Dict,
@@ -741,11 +771,7 @@ def calibrate_phi_all_cases(
     permeability_flibe_guess,
     outdir_root: Path = Path("exports") / "figs" / "calibration_A",
 ) -> Dict[str, dict]:
-    """
-    Calibrate (Φ0, E) for each case separately (Run 1 only).
-    Outputs are written to: outdir_root/<case_name>/...
-    Returns {case_name: result_dict}, where result_dict contains the fitted permeability.
-    """
+    """Calibrate (Φ0, E) for each case separately (Run 1 only)."""
     results: Dict[str, dict] = {}
     for case_name in cases.keys():
         res = calibrate_phi_schemeA(
@@ -759,10 +785,11 @@ def calibrate_phi_all_cases(
             outdir=outdir_root,
             also_show=False,
             allowed_case_names=[case_name],  # per-case fit
+            correction_iters=1,              # <- one nonlinear correction pass
+            correction_blend=1.0,            # <- full update
         )
         results[case_name] = res
     return results
-
 
 def plot_case_breakdowns_with_exp(
     case_name: str,
@@ -780,12 +807,7 @@ def plot_case_breakdowns_with_exp(
       - Flux in  (total_in)
       - Flux out (total_out)
       - Glovebox flux (glovebox)
-      - Per-surface fluxes (six faces, in per_surface['labels'] order)
-
-    Each bar is annotated with its numeric value. The figure also displays
-    the current temperature, y_ft, and the boundary-condition parameters used.
-
-    Keep numeric labels above every bar.
+      - Per-surface fluxes (six faces)
     """
     table = case_cfg.get("table", {})
     case_outdir = outdir_root / case_name
@@ -832,7 +854,7 @@ def plot_case_breakdowns_with_exp(
                 h = bar.get_height()
                 ax.text(
                     bar.get_x() + bar.get_width() / 2.0,
-                    (h if h > 0 else 0.0) * 1.02 + (1e-30 if h == 0 else 0),  # keep text above even if tiny
+                    (h if h > 0 else 0.0) * 1.02 + (1e-30 if h == 0 else 0),
                     f"{v:.2e}",
                     ha="center",
                     va="bottom",
@@ -844,7 +866,6 @@ def plot_case_breakdowns_with_exp(
             ax.set_ylabel("Flux [H/s]")
             ax.set_title(f"{case_name} — {run_name} — {int(Tc)} °C  (y_ft={float(y_ft_val):.5f} m)")
 
-            # explicit conditions box
             info = (
                 f"Case: {case_name}\nRun: {run_name}\n"
                 f"T = {int(Tc)} °C (T_K={Tk:.2f})\n"
@@ -881,7 +902,7 @@ def plot_flux_breakdown(
     permeability_flibe_fitted,
     outdir_root: Path = Path("exports") / "figs" / "calibration_A",
 ):
-    """Compatibility wrapper: old name -> new implementation."""
+    """Compatibility wrapper."""
     return plot_case_breakdowns_with_exp(
         case_name=case_name,
         case_cfg=case_cfg,
@@ -1222,7 +1243,7 @@ if __name__ == "__main__":
             xticks=xticks,
         )
 
-    # --- helper: Ni (Sieverts side) permeability at T ---
+    # --- Ni (Sieverts side) permeability at T ---
     def pi_ni_at_T(T_K: float) -> float:
         """
         Simple Ni permeability Φ(T). Default: Φ = D * K_S  (Sieverts side).
