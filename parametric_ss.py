@@ -1118,6 +1118,42 @@ if __name__ == "__main__":
         },
     }
 
+    exp_error_data = {
+        "normal_infinite": {
+            500.0: 0.15,
+        },
+        "normal_transparent": {
+            500.0: 0.15,
+        },
+        "swap_infinite": {
+            500.0: 0.20,
+        },
+        "swap_transparent": {
+            500.0: { "runs": {"Run 1": 8.81e13}},
+            550.0: { "runs": {"Run 1": 1.50e14}},
+            600.0: { "runs": {"Run 1": 1.79e14}},
+            700.0: { "runs": {"Run 1": 1.99e14}},
+        },
+   }
+
+    def get_exp_error(case_name, temp, run_name="Run 1"):
+        """Return the absolute error for (case, temp, run_name).
+        If not found, return None."""
+        case = exp_error_data.get(case_name)
+        if case is None:
+            return None
+
+        # swap_transparent: exp_error_data[case][temp]["runs"][run_name]
+        if case_name == "swap_transparent":
+            t = case.get(float(temp))
+            if not t:
+                return None
+            return t.get("runs", {}).get(run_name)
+
+        # other cases: exp_error_data[case][temp]
+        return case.get(float(temp))
+
+
    # Although the code is designed to process all four cases at once, possibly due to MPI memory issues (not fully confirmed), it is safer to run only one case at a time.
     cases = {
         # "normal_infinite": {"table": normal_infinite, "out_mode": "particle_flux_zero"},
@@ -1269,6 +1305,7 @@ if __name__ == "__main__":
         totals_by_run = summary["totals_by_run"]
         exp_by_run = summary["exp_by_run"]
         xticks = summary["xticks"]
+        yerr_exp = [get_exp_error(case_name, t, r) for t in summary["xticks"]]
 
         x = np.arange(len(xticks), dtype=float)
         group_w = 0.8
@@ -1279,20 +1316,39 @@ if __name__ == "__main__":
         shifts = np.linspace(-group_w / 2 + w, group_w / 2 - w, len(run_names))
 
         for s, r in zip(shifts, run_names):
-            bars_exp = axA.bar(
-                x + s - w / 2,
-                exp_by_run[r],
-                width=w,
-                label=f"Exp {r}",
-                edgecolor="black",
-                fill=False,
-            )
+            # model: keep solid bars
             bars_mod = axA.bar(
-                x + s + w / 2,
+                x,
                 totals_by_run[r],
                 width=w,
                 label=f"Model {r}",
+                color="C0", alpha=0.85, edgecolor="none",
             )
+
+            # exp: line+markers with error bars (no bar)
+            axA.errorbar(
+                x,
+                exp_by_run[r],
+                yerr=[get_exp_error(case_name, T, r) for T in xticks],
+                fmt="o-", lw=1.8, ms=6, capsize=4, color="C1",
+                label=f"Exp {r}",
+            )
+
+            # annotate experiment values directly on points
+            for xi, yi in zip(x, exp_by_run[r]):
+                if np.isnan(yi):
+                    continue
+                axA.text(
+                    xi,
+                    yi * 1.02,  # slight upward offset
+                    f"{yi:.2e}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                    color="C1",
+                    weight="bold",
+                )
+
             def _annot(container, values):
                 for rect, val in zip(container, values):
                     if np.isnan(val):
@@ -1305,7 +1361,7 @@ if __name__ == "__main__":
                         va="bottom",
                         fontsize=9,
                     )
-            _annot(bars_exp, exp_by_run[r])
+            # _annot(bars_exp, exp_by_run[r])
             _annot(bars_mod, totals_by_run[r])
 
         xticklabels = []
@@ -1315,7 +1371,7 @@ if __name__ == "__main__":
             pi_ni = pi_ni_at_T(Tk)
             yft = Y_FT_BY_TEMP_C.get(T, np.nan)
             xticklabels.append(
-                f"{int(T)}°C\nΦ_FLiBe={phi_flibe:.2e}\nΦ_Ni={pi_ni:.2e}\n" f"y_ft={yft:.5f} m"
+                f"{int(T)}°C\nΦ_FLiBe={phi_flibe:.2e}\nΦ_Ni={pi_ni:.2e}\n" f"y_ft={yft:.5e} m"
             )
 
         axA.set_xticks(x)
