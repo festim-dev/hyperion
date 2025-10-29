@@ -78,12 +78,12 @@ left_bc_liquid = F.SurfaceSubdomain(id=41)
 left_bc_top_Ni = F.SurfaceSubdomain(id=42)
 left_bc_middle_Ni = F.SurfaceSubdomain(id=43)
 left_bc_bottom_Ni = F.SurfaceSubdomain(id=44)
-top_Ni_bottom = F.SurfaceSubdomain(id=5)
-Ds_Ni_left = F.SurfaceSubdomain(id=6)
-Up_Ni_left = F.SurfaceSubdomain(id=7)
-Liquid_top = F.SurfaceSubdomain(id=8)
-mem_Ni_bottom = F.SurfaceSubdomain(id=9)
-bottom_Ni_top = F.SurfaceSubdomain(id=10)
+top_cap_Ni = F.SurfaceSubdomain(id=5)
+top_sidewall_Ni = F.SurfaceSubdomain(id=6)
+bottom_sidewall_Ni = F.SurfaceSubdomain(id=7)
+liquid_surface = F.SurfaceSubdomain(id=8)
+mid_membrane_Ni = F.SurfaceSubdomain(id=9)
+bottom_cap_Ni = F.SurfaceSubdomain(id=10)
 liquid_solid_interface = F.SurfaceSubdomain(id=99)
 
 my_model = F.HydrogenTransportProblemDiscontinuous()
@@ -100,12 +100,12 @@ my_model.subdomains = [
     left_bc_top_Ni,
     left_bc_middle_Ni,
     left_bc_bottom_Ni,
-    top_Ni_bottom,
-    Ds_Ni_left,
-    Up_Ni_left,
-    Liquid_top,
-    mem_Ni_bottom,
-    bottom_Ni_top,
+     top_cap_Ni,
+    top_sidewall_Ni,
+    bottom_sidewall_Ni,
+    liquid_surface,
+    mid_membrane_Ni,
+    bottom_cap_Ni,
     liquid_solid_interface,
 ]
 
@@ -121,12 +121,12 @@ my_model.surface_to_volume = {
     left_bc_top_Ni: solid_volume,
     left_bc_middle_Ni: solid_volume,
     left_bc_bottom_Ni: solid_volume,
-    top_Ni_bottom: solid_volume,
-    Ds_Ni_left: solid_volume,
-    Up_Ni_left: solid_volume,
-    Liquid_top: fluid_volume,
-    mem_Ni_bottom: solid_volume,
-    bottom_Ni_top: solid_volume,
+    top_cap_Ni: solid_volume,
+    top_sidewall_Ni: solid_volume,
+    bottom_sidewall_Ni: solid_volume,
+    liquid_surface: fluid_volume,
+    mid_membrane_Ni: solid_volume,
+    bottom_cap_Ni: solid_volume,
 }
 
 H = F.Species("H", subdomains=my_model.volume_subdomains)
@@ -134,9 +134,9 @@ my_model.species = [H]
 
 my_model.temperature = 773
 
-upstream_volume_surfaces = [mem_Ni_bottom, bottom_Ni_top, Up_Ni_left]
-downstream_volume_surfaces_Ni = [top_Ni_bottom, Ds_Ni_left]
-downstream_volume_surfaces = [top_Ni_bottom, Ds_Ni_left, Liquid_top]
+upstream_volume_surfaces = [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
+downstream_volume_surfaces_Ni = [ top_cap_Ni, top_sidewall_Ni]
+downstream_volume_surfaces = [ top_cap_Ni, top_sidewall_Ni, liquid_surface]
 
 # constant upstream pressure
 P_up = 1.11e5  # Pa
@@ -160,7 +160,7 @@ downstream_surface_bcs = [
     F.FixedConcentrationBC(
         subdomain=s, species=H, value=0.0
     )  # downstream partial pressure is ~5 Pa << P_up ~1e5 Pa
-    for s in downstream_volume_surfaces_Ni + [Liquid_top]
+    for s in downstream_volume_surfaces_Ni + [liquid_surface]
 ]
 
 my_model.boundary_conditions = upstream_surface_bcs + downstream_surface_bcs
@@ -182,9 +182,9 @@ downstream_fluxes_total = [
     CylindricalFlux(field=H, surface=surf) for surf in downstream_volume_surfaces
 ]
 glovebox_flux = CylindricalFlux(field=H, surface=out_surf)
-flux_out_liquid = CylindricalFlux(field=H, surface=Liquid_top)
-flux_out_Ni_sidewall = CylindricalFlux(field=H, surface=Ds_Ni_left)
-flux_out_top_Ni_bottom = CylindricalFlux(field=H, surface=top_Ni_bottom)
+flux_out_liquid = CylindricalFlux(field=H, surface=liquid_surface)
+flux_out_Ni_sidewall = CylindricalFlux(field=H, surface=top_sidewall_Ni)
+flux_out_top_cap_Ni = CylindricalFlux(field=H, surface=top_cap_Ni)
 
 # field exports for visualization (optional)
 my_model.exports = [
@@ -202,7 +202,7 @@ my_model.exports += [
     glovebox_flux,
     flux_out_liquid,
     flux_out_Ni_sidewall,
-    flux_out_top_Ni_bottom,
+    flux_out_top_cap_Ni,
 ]
 
 # -------- initialise & run transient  --------
@@ -215,7 +215,7 @@ t = np.asarray(glovebox_flux.t, dtype=float)  # seconds
 v_glovebox = np.asarray(glovebox_flux.data, dtype=float)
 v_out_liquid = np.asarray(flux_out_liquid.data, dtype=float)
 v_downstream_sidewall = np.asarray(flux_out_Ni_sidewall.data, dtype=float)
-v_downstream_top = np.asarray(flux_out_top_Ni_bottom.data, dtype=float)
+v_downstream_top = np.asarray(flux_out_top_cap_Ni.data, dtype=float)
 
 v_downstream_total = v_out_liquid + v_downstream_sidewall + v_downstream_top
 
