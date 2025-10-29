@@ -63,12 +63,12 @@ out_surf = F.SurfaceSubdomain(id=3)
 left_bc_top_Ni = F.SurfaceSubdomain(id=42)
 left_bc_middle_Ni = F.SurfaceSubdomain(id=43)
 left_bc_bottom_Ni = F.SurfaceSubdomain(id=44)
-top_Ni_bottom = F.SurfaceSubdomain(id=5)
-Ds_Ni_left = F.SurfaceSubdomain(id=6)
-Up_Ni_left = F.SurfaceSubdomain(id=7)
+top_cap_Ni = F.SurfaceSubdomain(id=5)
+top_sidewall_Ni = F.SurfaceSubdomain(id=6)
+bottom_sidewall_Ni = F.SurfaceSubdomain(id=7)
 mem_Ni_top = F.SurfaceSubdomain(id=8)
 mem_Ni_bottom = F.SurfaceSubdomain(id=9)
-bottom_Ni_top = F.SurfaceSubdomain(id=10)
+bottom_cap_Ni = F.SurfaceSubdomain(id=10)
 liquid_solid_interface = F.SurfaceSubdomain(id=99)
 
 
@@ -88,27 +88,27 @@ my_model.subdomains = [
     left_bc_top_Ni,
     left_bc_middle_Ni,
     left_bc_bottom_Ni,
-    top_Ni_bottom,
-    Ds_Ni_left,
-    Up_Ni_left,
+    top_cap_Ni,
+    top_sidewall_Ni,
+    bottom_sidewall_Ni,
     mem_Ni_top,
     mem_Ni_bottom,
-    bottom_Ni_top,
+    bottom_cap_Ni,
     liquid_solid_interface,
 ]
 
 my_model.surface_to_volume = {
     out_surf: solid_volume,
-    # left_bc_liquid: solid_volume,
+    # left_bc_liquid: liquid_volume,
     left_bc_top_Ni: solid_volume,
     left_bc_middle_Ni: solid_volume,
     left_bc_bottom_Ni: solid_volume,
-    top_Ni_bottom: solid_volume,
-    Ds_Ni_left: solid_volume,
-    Up_Ni_left: solid_volume,
+    top_cap_Ni: solid_volume,
+    top_sidewall_Ni: solid_volume,
+    bottom_sidewall_Ni: solid_volume,
     mem_Ni_top: solid_volume,
     mem_Ni_bottom: solid_volume,
-    bottom_Ni_top: solid_volume,
+    bottom_cap_Ni: solid_volume,
 }
 
 H = F.Species("H", subdomains=my_model.volume_subdomains)
@@ -116,9 +116,9 @@ my_model.species = [H]
 
 my_model.temperature = 973
 
-upstream_volume_surfaces = [mem_Ni_bottom, bottom_Ni_top, Up_Ni_left]
+upstream_volume_surfaces = [mem_Ni_bottom, bottom_cap_Ni, bottom_sidewall_Ni]
 
-downstream_volume_surfaces = [top_Ni_bottom, Ds_Ni_left, mem_Ni_top]
+downstream_volume_surfaces = [top_cap_Ni, top_sidewall_Ni, mem_Ni_top]
 
 
 # case 2: Outside BC as isolated (no flux)
@@ -180,8 +180,8 @@ downstream_fluxes = [
 glovebox_flux = CylindricalFlux(field=H, surface=out_surf)
 
 flux_out_membrane = CylindricalFlux(field=H, surface=mem_Ni_top)
-flux_out_Ds_ni_left = CylindricalFlux(field=H, surface=Ds_Ni_left)
-flux_out_top_Ni_bottom = CylindricalFlux(field=H, surface=top_Ni_bottom)
+flux_out_Ds_ni_left = CylindricalFlux(field=H, surface=top_sidewall_Ni)
+flux_out_top_cap_Ni = CylindricalFlux(field=H, surface=top_cap_Ni)
 
 
 my_model.exports = [
@@ -194,7 +194,7 @@ my_model.exports += fluxes_in
 my_model.exports += [glovebox_flux]
 my_model.exports += [flux_out_membrane]
 my_model.exports += [flux_out_Ds_ni_left]
-my_model.exports += [flux_out_top_Ni_bottom]
+my_model.exports += [flux_out_top_cap_Ni]
 
 my_model.initialise()
 my_model.run()
@@ -211,7 +211,7 @@ print(f"Total downstream flux: {total_downstream_flux:.4e} H/s")
 print(f"flux through membrane top: {flux_out_membrane.value:.4e} H/s")
 print(f"flux through nickel downstream sidewall: {flux_out_Ds_ni_left.value:.4e} H/s")
 print(
-    f"flux through nickel downstream top surface: {flux_out_top_Ni_bottom.value:.4e} H/s"
+    f"flux through nickel downstream top surface: {flux_out_top_cap_Ni.value:.4e} H/s"
 )
 print("-----")
 print(
@@ -231,7 +231,7 @@ fluxes = {
     "Total downstream flux": float(total_downstream_flux),
     "Flux through membrane surface": float(flux_out_membrane.value),
     "Flux through Ni downstream sidewall": float(flux_out_Ds_ni_left.value),
-    "Flux through Ni downstream top surface": float(flux_out_top_Ni_bottom.value),
+    "Flux through Ni downstream top surface": float(flux_out_top_cap_Ni.value),
     "Flux balance (in + glovebox + downstream)": float(
         total_flux_in + total_flux_glovebox + total_downstream_flux
     ),
