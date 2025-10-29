@@ -72,12 +72,12 @@ left_bc_liquid = F.SurfaceSubdomain(id=41)
 left_bc_top_Ni = F.SurfaceSubdomain(id=42)
 left_bc_middle_Ni = F.SurfaceSubdomain(id=43)
 left_bc_bottom_Ni = F.SurfaceSubdomain(id=44)
-top_Ni_bottom = F.SurfaceSubdomain(id=5)
-Ds_Ni_left = F.SurfaceSubdomain(id=6)
-Up_Ni_left = F.SurfaceSubdomain(id=7)
-Liquid_top = F.SurfaceSubdomain(id=8)
-mem_Ni_bottom = F.SurfaceSubdomain(id=9)
-bottom_Ni_top = F.SurfaceSubdomain(id=10)
+top_cap_Ni = F.SurfaceSubdomain(id=5)
+top_sidewall_Ni = F.SurfaceSubdomain(id=6)
+bottom_sidewall_Ni = F.SurfaceSubdomain(id=7)
+liquid_surface = F.SurfaceSubdomain(id=8)
+mid_membrane_Ni = F.SurfaceSubdomain(id=9)
+bottom_cap_Ni = F.SurfaceSubdomain(id=10)
 liquid_solid_interface = F.SurfaceSubdomain(id=99)
 
 
@@ -97,34 +97,34 @@ my_model.subdomains = [
     left_bc_top_Ni,
     left_bc_middle_Ni,
     left_bc_bottom_Ni,
-    top_Ni_bottom,
-    Ds_Ni_left,
-    Up_Ni_left,
-    Liquid_top,
-    mem_Ni_bottom,
-    bottom_Ni_top,
+    top_cap_Ni,
+    top_sidewall_Ni,
+    bottom_sidewall_Ni,
+    liquid_surface,
+    mid_membrane_Ni,
+    bottom_cap_Ni,
     liquid_solid_interface,
 ]
 
 my_model.method_interface = "penalty"
 interface = F.Interface(
-    id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e28
+    id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e24
 )
 
 my_model.interfaces = [interface]
 
 my_model.surface_to_volume = {
     out_surf: solid_volume,
-    left_bc_liquid: solid_volume,
+    left_bc_liquid: fluid_volume,
     left_bc_top_Ni: solid_volume,
     left_bc_middle_Ni: solid_volume,
     left_bc_bottom_Ni: solid_volume,
-    top_Ni_bottom: solid_volume,
-    Ds_Ni_left: solid_volume,
-    Up_Ni_left: solid_volume,
-    Liquid_top: fluid_volume,
-    mem_Ni_bottom: solid_volume,
-    bottom_Ni_top: solid_volume,
+    top_cap_Ni: solid_volume,
+    top_sidewall_Ni: solid_volume,
+    bottom_sidewall_Ni: solid_volume,
+    liquid_surface: fluid_volume,
+    mid_membrane_Ni: solid_volume,
+    bottom_cap_Ni: solid_volume,
 }
 
 H = F.Species("H", subdomains=my_model.volume_subdomains)
@@ -132,24 +132,34 @@ my_model.species = [H]
 
 my_model.temperature = 773
 
-upstream_volume_surfaces = [mem_Ni_bottom, bottom_Ni_top, Up_Ni_left]
+upstream_volume_surfaces = [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
 
-downstream_volume_surfaces = [top_Ni_bottom, Ds_Ni_left, Liquid_top]
+downstream_volume_surfaces = [top_cap_Ni, top_sidewall_Ni]
 
 # case 1: Outside BC as fixed concentration
 # out_surface_bc = F.FixedConcentrationBC(subdomain=out_surf, species=H, value=0.0)
 
 # case 2: Outside BC as isolated (no flux)
-# out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
+out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
 
 # case 3:
 # glovebox BC as sieverts with P = 1 pa
 # typical H2 partial pressure in glovebox is between 1e-6 atm to 1e-4 atm
 # here we take 1 pa as an example
-p_glovebox = 1  # Pa
-out_surface_bc = F.SievertsBC(
-    subdomain=out_surf, species=H, pressure=p_glovebox, S_0=K_solid, E_S=E_K_S_solid
-)
+# p_glovebox = 10  # Pa
+# out_surface_bc = F.SievertsBC(
+#     subdomain=out_surf, species=H, pressure=p_glovebox, S_0=K_solid, E_S=E_K_S_solid
+# )
+
+# out_surface_bc = F.SurfaceReactionBC(
+#     reactant=[H, H],
+#     gas_pressure=1,
+#     k_r0=1e-20,
+#     E_kr=0.2,
+#     k_d0=1e-4,
+#     E_kd=0.1,
+#     subdomain=out_surf,
+# )
 
 P_up = 1e5  # Pa
 
@@ -165,23 +175,16 @@ my_model.boundary_conditions = (
         F.FixedConcentrationBC(subdomain=s, species=H, value=0.0)
         for s in downstream_volume_surfaces
     ]
-)
-
-my_model.boundary_conditions = (
-    [
+    +    [
         F.HenrysBC(
-            subdomain=s, species=H, pressure=P_up, S_0=K_solid, E_S=E_K_S_solid
+            subdomain=s, species=H, pressure=P_up, H_0=K_solid, E_H=E_K_S_solid
         )  ###NOTE: E_s can not be 0.
-        for s in downstream_volume_surfaces
-    ]
-    + [out_surface_bc]
-    + [
-        F.FixedConcentrationBC(subdomain=s, species=H, value=0.0)
-        for s in upstream_volume_surfaces
+        for s in [liquid_surface]
     ]
 )
 
-my_model.settings = F.Settings(atol=1e-10, rtol=1e-10, transient=False)
+
+my_model.settings = F.Settings(atol=1e12, rtol=1e-13, transient=False)
 
 
 fluxes_in = [
@@ -192,9 +195,9 @@ downstream_fluxes = [
 ]
 glovebox_flux = CylindricalFlux(field=H, surface=out_surf)
 
-flux_out_liquid = CylindricalFlux(field=H, surface=Liquid_top)
-flux_out_Ds_ni_left = CylindricalFlux(field=H, surface=Ds_Ni_left)
-flux_out_top_Ni_bottom = CylindricalFlux(field=H, surface=top_Ni_bottom)
+flux_out_liquid = CylindricalFlux(field=H, surface=liquid_surface)
+flux_out_Ds_ni_left = CylindricalFlux(field=H, surface=top_sidewall_Ni)
+flux_out_top_cap_Ni = CylindricalFlux(field=H, surface=top_cap_Ni)
 
 # my_model.exports = [
 #     F.VTXSpeciesExport(
@@ -225,7 +228,7 @@ my_model.exports += fluxes_in
 my_model.exports += [glovebox_flux]
 my_model.exports += [flux_out_liquid]
 my_model.exports += [flux_out_Ds_ni_left]
-my_model.exports += [flux_out_top_Ni_bottom]
+my_model.exports += [flux_out_top_cap_Ni]
 
 my_model.initialise()
 my_model.run()
@@ -243,7 +246,7 @@ print("-----")
 print(f"Total downstream flux: {total_downstream_flux:.4e} H/s")
 print(f"flux through liquid surface: {flux_out_liquid.value:.4e} H/s")
 print(f"flux through nickel downstream vertically: {flux_out_Ds_ni_left.value:.4e} H/s")
-print(f"flux through nickel downstream bottom: {flux_out_top_Ni_bottom.value:.4e} H/s")
+print(f"flux through nickel downstream bottom: {flux_out_top_cap_Ni.value:.4e} H/s")
 
 # Collect values into a dict
 fluxes = {
