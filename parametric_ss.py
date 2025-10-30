@@ -2,7 +2,7 @@ import festim as F
 from mesh import generate_mesh, set_y_ft
 from dolfinx.log import set_log_level, LogLevel
 from cylindrical_flux import CylindricalFlux
-from dolfinx.io import gmshio
+from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 import h_transport_materials as htm
 from typing import Literal, Tuple
@@ -74,9 +74,12 @@ def load_or_make_mesh(mesh_file, mesh_size, model_rank=0):
         return _mesh_cache[mesh_file]
 
     # Otherwise, read from disk and store in cache
-    mesh, cell_tags, facet_tags = gmshio.read_from_msh(
-        mesh_file, MPI.COMM_WORLD, model_rank
-    )
+    _read = gmshio.read_from_msh(
+        mesh_file, MPI.COMM_WORLD, model_rank)
+    mesh = _read.mesh
+    cell_tags = _read.cell_tags 
+    facet_tags = _read.facet_tags
+
     _mesh_cache[mesh_file] = (mesh, cell_tags, facet_tags)
     return _mesh_cache[mesh_file]
 
