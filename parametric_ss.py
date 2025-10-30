@@ -19,7 +19,7 @@ import multiprocessing as mp
 try:
     mp.set_start_method("spawn")
 except RuntimeError:
-    pass  # already set elsewhere
+    pass
 
 # ------------------------------ Globals ------------------------------
 _DEFER_SHOW = True
@@ -100,7 +100,7 @@ def _dispose_model(m):
 
 # ------------------------------ Mesh I/O ------------------------------
 def _mesh_key_from_yft(y_ft: float) -> str:
-    # Stabilize the filename key to 5 decimals (consistent everywhere)
+    # Stabilize the filename key to 5 decimals (to avoid float precision issues)
     y5 = float(f"{float(y_ft):.5f}")
     return f"mesh_{y5:.5f}.msh"
 
@@ -447,7 +447,7 @@ def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
 
     def J_of(phi_val: float) -> float:
         perm = htm.Permeability(pre_exp=float(phi_val), act_energy=0.0, law="henry")
-        out = run_once(  # in child we can call non-safe wrapper
+        out = run_once(
             p.case,
             p.T_K,
             p.P_up,
@@ -461,7 +461,7 @@ def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
         )
         return max(float(out["total_out"]), tiny)
 
-    # bracket in log space (same tolerances you used)
+    # bracket in log space and bisection
     phi_lo, phi_hi = 1e10, 1e15
     tol_log, maxit = 3e-3, 18
     log_lo, log_hi = math.log10(phi_lo), math.log10(phi_hi)
@@ -826,11 +826,11 @@ def calibrate_phi_schemeA(
 
     # 1) per-T inversion
     ln_phi_list, invT_list, rows = [], [], []
-    sigmas_lnphi = []  # <-- NEW: hold propagated σ for ln(phi)
+    sigmas_lnphi = []  # propagated errors for ln(phi)
     for p in pts:
         phi_T = _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel)
 
-        # --- NEW: propagate σ_J -> σ_lnphi via finite-difference on J(phi) ---
+        # ---propagate σ_J -> σ_lnphi via finite-difference on J(phi) ---
         sigma_J = None
         try:
             sigma_J = get_exp_error(p.case, p.T_C, p.run)  # may be None/NaN
@@ -839,7 +839,7 @@ def calibrate_phi_schemeA(
 
         tiny = np.finfo(float).tiny
         if (sigma_J is not None) and np.isfinite(sigma_J) and (sigma_J > 0.0):
-            # Outflow BC for this point (match your validation code logic)
+            # Outflow BC for this point (to match inversion)
             out_bc_p = (
                 {"type": "sieverts", "pressure": p.P_gb}
                 if p.P_gb is not None
@@ -865,7 +865,7 @@ def calibrate_phi_schemeA(
                 return float(out_loc["total_out"])
 
             # centered derivative dJ/dphi at phi_T
-            rel_step = 0.02  # 2% step; you can reduce to 1% if stable
+            rel_step = 0.02  # 2% step;
             delta = max(rel_step * float(phi_T), 1e-16)
             try:
                 Jp = J_of_phi(float(phi_T) + delta)
@@ -883,7 +883,6 @@ def calibrate_phi_schemeA(
             sigma_lnphi = None
 
         sigmas_lnphi.append(sigma_lnphi)
-        # --- END NEW ---
 
         ln_phi_list.append(math.log(max(phi_T, tiny)))
         invT_list.append(1.0 / p.T_K)
@@ -1163,7 +1162,7 @@ if __name__ == "__main__":
     # quieter logs from dolfinx
     set_log_level(LogLevel.WARNING)
 
-    # ---- materials (same as before) ----
+    # ---- materials ----
     diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(
         isotope="h"
     )
@@ -1186,7 +1185,7 @@ if __name__ == "__main__":
         700.0: 0.02936,
     }
 
-    # ---- cases (unchanged tables) ----
+    # ---- cases ----
     normal_infinite = {
         500.0: {
             "runs": {
@@ -1410,7 +1409,7 @@ if __name__ == "__main__":
             return val if np.isfinite(val) and val > 0.0 else None
         return None
 
-    # Choose the case(s) you want to run
+    # Choose the case(s) to calibrate
     cases = {
         # "normal_infinite": {"table": normal_infinite, "out_mode": "particle_flux_zero"},
         # "normal_transparent": {"table": normal_transparent, "out_mode": "sieverts"},
