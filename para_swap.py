@@ -575,31 +575,16 @@ def _parity_metrics(jm: np.ndarray, je: np.ndarray) -> tuple[float, float]:
 
 # --- EXP error lookup (extended with SWAP data) ---
 exp_error_data = {
-    "normal_infinite": {
-        500.0: {"runs": {"Run 1": 2.72e13, "Run 2": 4.49e13}},
-        550.0: {"runs": {"Run 1": 4.62e13, "Run 2": 5.50e13}},
-        600.0: {"runs": {"Run 1": 5.04e13, "Run 2": 7.63e13}},
-        650.0: {"runs": {"Run 1": 7.87e13, "Run 2": 6.96e13}},
-        700.0: {"runs": {"Run 1": 9.65e13, "Run 2": 9.34e13}},
-    },
-    "normal_transparent": {
-        500.0: {"runs": {"Run 1": 2.72e13, "Run 2": 4.49e13}},
-        550.0: {"runs": {"Run 1": 4.62e13, "Run 2": 5.50e13}},
-        600.0: {"runs": {"Run 1": 5.04e13, "Run 2": 7.63e13}},
-        650.0: {"runs": {"Run 1": 7.87e13, "Run 2": 6.96e13}},
-        700.0: {"runs": {"Run 1": 9.65e13, "Run 2": 9.34e13}},
-    },
-    # ---- SWAP experimental σ(J) you provided ----
     "swap_infinite": {
-        500.0: {"runs": {"Run 1": 8.81e13}},
-        550.0: {"runs": {"Run 1": 1.50e14}},
-        600.0: {"runs": {"Run 1": 1.79e14}},
+        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
+        550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
+        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
         700.0: {"runs": {"Run 1": 1.99e14}},
     },
     "swap_transparent": {
-        500.0: {"runs": {"Run 1": 8.81e13}},
-        550.0: {"runs": {"Run 1": 1.50e14}},
-        600.0: {"runs": {"Run 1": 1.79e14}},
+        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
+        550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
+        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
         700.0: {"runs": {"Run 1": 1.99e14}},
     },
 }
@@ -1191,63 +1176,89 @@ if __name__ == "__main__":
         650.0: 0.02930,
         700.0: 0.02936,
     }
-
-    # ---- SWAP input tables (your new data)
+    # ---- SWAP input tables
     swap_infinite = {
         500.0: {
-            "runs": {"Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15}}
+            "runs": {
+                # "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
+                "Run 2": {"P_up": 1.31e5, "P_down": 1.99e1, "J_exp": 4.34e15},
+            }
         },
         550.0: {
-            "runs": {"Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15}}
+            "runs": {
+                # "Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15},
+                "Run 2": {"P_up": 1.31e5, "P_down": 3.89e1, "J_exp": 8.58e15},
+            }
         },
         600.0: {
-            "runs": {"Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15}}
+            "runs": {
+                # "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
+                "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
+            }
         },
-        700.0: {
-            "runs": {"Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15}}
-        },
+        # 700.0: {
+        #     "runs": {"Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15}}
+        # },
     }
     swap_transparent = {
         500.0: {
             "runs": {
-                "Run 1": {
+                # "Run 1": {
+                #     "P_up": 1.31e5,
+                #     "P_down": 1.77e1,
+                #     "P_gb": 7.0,
+                #     "J_exp": 3.89e15,
+                # },
+                "Run 2": {
                     "P_up": 1.31e5,
-                    "P_down": 1.77e1,
+                    "P_down": 3.89e1,
                     "P_gb": 7.0,
-                    "J_exp": 3.89e15,
-                }
+                    "J_exp": 4.34e15,
+                },
             }
         },
         550.0: {
             "runs": {
-                "Run 1": {
+                # "Run 1": {
+                #     "P_up": 1.31e5,
+                #     "P_down": 3.21e1,
+                #     "P_gb": 1.0e1,
+                #     "J_exp": 7.20e15,
+                # },
+                "Run 2": {
                     "P_up": 1.31e5,
-                    "P_down": 3.21e1,
+                    "P_down": 3.89e1,
                     "P_gb": 1.0e1,
-                    "J_exp": 7.20e15,
-                }
+                    "J_exp": 8.58e15,
+                },
             }
         },
         600.0: {
             "runs": {
-                "Run 1": {
-                    "P_up": 1.33e5,
-                    "P_down": 3.57e1,
-                    "P_gb": 1.2e1,
-                    "J_exp": 7.64e15,
-                }
-            }
-        },
-        700.0: {
-            "runs": {
-                "Run 1": {
+                # "Run 1": {
+                #     "P_up": 1.33e5,
+                #     "P_down": 3.57e1,
+                #     "P_gb": 1.2e1,
+                #     "J_exp": 7.64e15,
+                # },
+                "Run 2": {
                     "P_up": 1.32e5,
-                    "P_down": 4.07e1,
-                    "P_gb": 2.2e1,
-                    "J_exp": 9.04e15,
-                }
+                    "P_down": 4.62e1,
+                    "P_gb": 1.2e1,
+                    "J_exp": 1.01e16,
+                },
             }
         },
+        # 700.0: {
+        #     "runs": {
+        #         "Run 1": {
+        #             "P_up": 1.32e5,
+        #             "P_down": 4.07e1,
+        #             "P_gb": 2.2e1,
+        #             "J_exp": 9.04e15,
+        #         }
+        #     }
+        # },
     }
 
     cases = {
