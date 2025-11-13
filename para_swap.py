@@ -1,4 +1,3 @@
-# === swap_calib_normal_style.py ===
 import festim as F
 from mesh import generate_mesh, set_y_ft
 from dolfinx.log import set_log_level, LogLevel
@@ -6,7 +5,7 @@ from cylindrical_flux import CylindricalFlux
 from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 import h_transport_materials as htm
-from typing import Literal, Tuple, Optional, List, Dict
+from typing import Tuple, Optional, List, Dict
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -16,6 +15,9 @@ import matplotlib
 import gc
 from petsc4py import PETSc
 import multiprocessing as mp
+import matplotlib as mpl
+from matplotlib.lines import Line2D
+
 
 try:
     mp.set_start_method("spawn")
@@ -30,21 +32,6 @@ _RANK0 = MPI.COMM_WORLD.rank == 0
 
 
 # ------------------------------ Utilities ------------------------------
-def _ensure_dir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
-
-
-def _arrhenius_str(Phi0: float, E_eV: float, unit="H·m⁻¹·s⁻¹·Pa⁻¹") -> str:
-    return (
-        r"$\varphi(T)$ = "
-        f"{Phi0:.4g} · exp("
-        + r"$-\dfrac{"
-        + f"{E_eV:.4g}"
-        + r"\ \mathrm{eV}}{k_B T}$"
-        + f")  [{unit}]"
-    )
-
-
 def _ensure_and_save(fig, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=220, bbox_inches="tight")
@@ -53,6 +40,7 @@ def _ensure_and_save(fig, out_path: Path) -> None:
     plt.close(fig)
 
 
+# ------------------------------ Model disposal ------------------------------
 def _dispose_model(m):
     if m is None:
         return
@@ -146,9 +134,6 @@ def make_model(
     K_S_nickel: htm.Solubility,
     temperature: float,
     P_up: float,
-    case: Literal[
-        "normal_infinite", "normal_transparent", "swap_infinite", "swap_transparent"
-    ],
     mesh_size: float = 2e-4,
     penalty_term: float = 1e22,
     P_down: float = 5.0,
@@ -179,15 +164,10 @@ def make_model(
         permeability_liquid=permeability_flibe,
     )
 
-    K_S_liquid = htm.Solubility(
-        S_0=permeability_flibe.pre_exp / D_flibe.pre_exp,
-        E_S=permeability_flibe.act_energy - D_flibe.act_energy,
-        law=permeability_flibe.law,
-    )
-    H_0_liq = K_S_liquid.pre_exp.magnitude
-    E_H_liq = K_S_liquid.act_energy.magnitude
-    K_S_0_Ni = K_S_nickel.pre_exp.magnitude
-    E_S_Ni = K_S_nickel.act_energy.magnitude
+    H_0_liq = mat_liquid.K_S_0
+    E_H_liq = mat_liquid.E_K_S
+    K_S_0_Ni = mat_solid.K_S_0
+    E_S_Ni = mat_solid.E_K_S
 
     fluid_volume = F.VolumeSubdomain(id=1, material=mat_liquid)
     solid_volume = F.VolumeSubdomain(id=2, material=mat_solid)
@@ -250,46 +230,22 @@ def make_model(
     my_model.species = [H]
     my_model.temperature = temperature
 
-    if case in ("normal_infinite", "normal_transparent"):
-        upstream_bcs = [
-            F.SievertsBC(
-                subdomain=s, species=H, pressure=P_up, S_0=K_S_0_Ni, E_S=E_S_Ni
-            )
-            for s in [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
-        ]
-        downstream_bcs = [
-            F.SievertsBC(subdomain=s, species=H, pressure=5.0, S_0=K_S_0_Ni, E_S=E_S_Ni)
-            for s in [top_cap_Ni, top_sidewall_Ni]
-        ] + [
-            F.HenrysBC(
-                subdomain=liquid_surface,
-                species=H,
-                pressure=P_down,
-                H_0=H_0_liq,
-                E_H=E_H_liq,
-            )
-        ]
-    elif case in ("swap_infinite", "swap_transparent"):
-        upstream_bcs = [
-            F.SievertsBC(
-                subdomain=s, species=H, pressure=P_up, S_0=K_S_0_Ni, E_S=E_S_Ni
-            )
-            for s in [top_cap_Ni, top_sidewall_Ni]
-        ] + [
-            F.HenrysBC(
-                subdomain=liquid_surface,
-                species=H,
-                pressure=P_up,
-                H_0=H_0_liq,
-                E_H=E_H_liq,
-            )
-        ]
-        downstream_bcs = [
-            F.SievertsBC(subdomain=s, species=H, pressure=5.0, S_0=K_S_0_Ni, E_S=E_S_Ni)
-            for s in [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
-        ]
-    else:
-        raise ValueError(f"Unknown case: {case}")
+    downstream_bcs = [
+        F.SievertsBC(subdomain=s, species=H, pressure=P_down, S_0=K_S_0_Ni, E_S=E_S_Ni)
+        for s in [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
+    ]
+    upstream_bcs = [
+        F.SievertsBC(subdomain=s, species=H, pressure=P_up, S_0=K_S_0_Ni, E_S=E_S_Ni)
+        for s in [top_cap_Ni, top_sidewall_Ni]
+    ] + [
+        F.HenrysBC(
+            subdomain=liquid_surface,
+            species=H,
+            pressure=P_up,
+            H_0=H_0_liq,
+            E_H=E_H_liq,
+        )
+    ]
 
     if out_bc is None:
         out_bc = {"type": "none"}
@@ -345,16 +301,8 @@ def make_model(
         "bottom_sidewall_Ni",
         "bottom_cap_Ni",
     ]
-    up_labels = (
-        ["mid_membrane_Ni", "bottom_cap_Ni", "bottom_sidewall_Ni"]
-        if case in ("normal_infinite", "normal_transparent")
-        else ["top_cap_Ni", "top_sidewall_Ni", "liquid_surface"]
-    )
-    down_labels = (
-        ["top_cap_Ni", "top_sidewall_Ni", "liquid_surface"]
-        if case in ("normal_infinite", "normal_transparent")
-        else ["mid_membrane_Ni", "bottom_cap_Ni", "bottom_sidewall_Ni"]
-    )
+    down_labels = ["mid_membrane_Ni", "bottom_cap_Ni", "bottom_sidewall_Ni"]
+    up_labels = ["top_cap_Ni", "top_sidewall_Ni", "liquid_surface"]
     fluxes_dict = {
         "flux_by_label": flux_by_label,
         "six_labels": six_labels,
@@ -380,138 +328,40 @@ def _get_flux_value(flux_obj) -> float:
     return 0.0
 
 
-# ----- child processes for safe solves and inversion -----
-def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
-    tiny = np.finfo(float).tiny
-
-    class P:
-        __slots__ = (
-            "case",
-            "T_C",
-            "T_K",
-            "run",
-            "P_up",
-            "P_down",
-            "P_gb",
-            "y_ft",
-            "J_exp",
-        )
-
-        def __init__(self, **kw):
-            [setattr(self, k, kw[k]) for k in self.__slots__]
-
-    p = P(**p_dict)
-    out_bc = (
-        {"type": "sieverts", "pressure": p.P_gb}
-        if p.P_gb is not None
-        else {"type": "particle_flux_zero"}
+def run_once(
+    T_K: float,
+    P_up: float,
+    P_down: float,
+    D_flibe,
+    D_nickel,
+    permeability_flibe,
+    K_S_nickel,
+    out_bc: dict | None = None,
+    y_ft: float | None = None,
+):
+    my_model, fluxes_dict = make_model(
+        temperature=T_K,
+        D_flibe=D_flibe,
+        D_nickel=D_nickel,
+        permeability_flibe=permeability_flibe,
+        K_S_nickel=K_S_nickel,
+        P_up=P_up,
+        P_down=P_down,
+        out_bc=out_bc,
+        y_ft=y_ft,
     )
+    my_model.initialise()
+    my_model.run()
 
-    def run_once(
-        case,
-        T_K,
-        P_up,
-        P_down,
-        D_flibe,
-        D_nickel,
-        permeability_flibe,
-        K_S_nickel,
-        out_bc,
-        y_ft,
-    ):
-        my_model, fluxes_dict = make_model(
-            temperature=T_K,
-            D_flibe=D_flibe,
-            D_nickel=D_nickel,
-            permeability_flibe=permeability_flibe,
-            K_S_nickel=K_S_nickel,
-            P_up=P_up,
-            case=case,
-            P_down=P_down,
-            out_bc=out_bc,
-            y_ft=y_ft,
-        )
-        my_model.initialise()
-        my_model.run()
-        flux_objects = fluxes_dict["flux_by_label"]
-        six_labels = fluxes_dict["six_labels"]
-        vals_six = {label: _get_flux_value(flux_objects[label]) for label in six_labels}
-        glovebox_val = float(_get_flux_value(fluxes_dict["glovebox_flux"]))
-        up_labels = fluxes_dict["up_labels"]
-        down_labels = fluxes_dict["down_labels"]
-        total_up = float(np.sum([vals_six[label] for label in up_labels], dtype=float))
-        total_down = float(
-            np.sum([vals_six[label] for label in down_labels], dtype=float)
-        )
-        _dispose_model(my_model)
-        return dict(total_in=total_up, glovebox=glovebox_val, total_out=total_down)
+    flux_objects = fluxes_dict["flux_by_label"]
+    six_labels = fluxes_dict["six_labels"]
+    vals_six = {label: _get_flux_value(flux_objects[label]) for label in six_labels}
 
-    def J_of(phi_val: float) -> float:
-        perm = htm.Permeability(pre_exp=float(phi_val), act_energy=0.0, law="henry")
-        out = run_once(
-            p.case,
-            p.T_K,
-            p.P_up,
-            p.P_down,
-            D_flibe,
-            D_nickel,
-            perm,
-            K_S_nickel,
-            out_bc,
-            p.y_ft,
-        )
-        return max(float(out["total_out"]), tiny)
+    down_labels = fluxes_dict["down_labels"]
+    total_down = float(np.sum([vals_six[label] for label in down_labels], dtype=float))
+    _dispose_model(my_model)
 
-    phi_lo, phi_hi = 1e10, 1e15
-    tol_log, maxit = 3e-3, 18
-    log_lo, log_hi = math.log10(phi_lo), math.log10(phi_hi)
-    target = max(float(p.J_exp), tiny)
-
-    J_lo, J_hi = J_of(10.0**log_lo), J_of(10.0**log_hi)
-    if (J_lo - target) * (J_hi - target) > 0.0:
-        if J_lo < target and J_hi < target:
-            log_hi += 1.0
-            J_hi = J_of(10.0**log_hi)
-        elif J_lo > target and J_hi > target:
-            log_lo -= 1.0
-            J_lo = J_of(10.0**log_lo)
-
-    for _ in range(maxit):
-        log_mid = 0.5 * (log_lo + log_hi)
-        J_mid = J_of(10.0**log_mid)
-        if abs(log_hi - log_lo) < tol_log:
-            q.put(10.0**log_mid)
-            return
-        if (J_lo - target) * (J_mid - target) <= 0.0:
-            log_hi, J_hi = log_mid, J_mid
-        else:
-            log_lo, J_lo = log_mid, J_mid
-    q.put(10.0 ** (0.5 * (log_lo + log_hi)))
-
-
-def _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel) -> float:
-    ctx = mp.get_context("spawn")
-    q = ctx.SimpleQueue()
-    p_dict = {
-        "case": p.case,
-        "T_C": p.T_C,
-        "T_K": p.T_K,
-        "run": p.run,
-        "P_up": p.P_up,
-        "P_down": p.P_down,
-        "P_gb": p.P_gb,
-        "y_ft": p.y_ft,
-        "J_exp": p.J_exp,
-    }
-    proc = ctx.Process(
-        target=_invert_point_child,
-        args=(p_dict, D_flibe, D_nickel, K_S_nickel, q),
-        daemon=False,
-    )
-    proc.start()
-    phi_T = q.get()
-    proc.join()
-    return float(phi_T)
+    return total_down
 
 
 # ------------------------------ Invert → Fit ------------------------------
@@ -538,7 +388,7 @@ def _collect_points_for_cases(
     for case_name, cfg in cases.items():
         if allowed_case_names and case_name not in allowed_case_names:
             continue
-        if not (case_name.startswith("normal") or case_name.startswith("swap")):
+        if not (case_name.startswith("swap")):
             continue
         table = cfg["table"]
         for Tc, row in table.items():
@@ -566,14 +416,7 @@ def _collect_points_for_cases(
     return pts
 
 
-def _parity_metrics(jm: np.ndarray, je: np.ndarray) -> tuple[float, float]:
-    eps = np.finfo(float).tiny
-    rmse_log = float(np.sqrt(np.mean((np.log10(jm + eps) - np.log10(je + eps)) ** 2)))
-    max_rel = float(np.max(np.abs((jm - je) / (je + eps))))
-    return rmse_log, max_rel
-
-
-# --- EXP error lookup (extended with SWAP data) ---
+# --- EXP error lookup ---
 exp_error_data = {
     "swap_infinite": {
         500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
@@ -612,57 +455,115 @@ def get_exp_error(case_name: str, temp, run_name: str = "Run 1"):
 
 
 # ------------------------------ Core: inversion with uncertainty ------------------------------
+# ----- child processes for safe solves and inversion -----
+def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
+    tiny = np.finfo(float).tiny
+
+    class P:
+        __slots__ = (
+            "case",
+            "T_C",
+            "T_K",
+            "run",
+            "P_up",
+            "P_down",
+            "P_gb",
+            "y_ft",
+            "J_exp",
+        )
+
+        def __init__(self, **kw):
+            [setattr(self, k, kw[k]) for k in self.__slots__]
+
+    p = P(**p_dict)
+    out_bc = (
+        {"type": "sieverts", "pressure": p.P_gb}
+        if p.P_gb is not None
+        else {"type": "particle_flux_zero"}
+    )
+
+    def J_of_phi(phi_val: float) -> float:
+        perm = htm.Permeability(pre_exp=float(phi_val), act_energy=0.0, law="henry")
+        out = run_once(
+            p.T_K,
+            p.P_up,
+            p.P_down,
+            D_flibe,
+            D_nickel,
+            perm,
+            K_S_nickel,
+            out_bc,
+            p.y_ft,
+        )
+        return max(float(out), tiny)
+
+    phi_lo, phi_hi = 1e10, 1e15
+    tol_log, maxit = 3e-3, 18
+    log_lo, log_hi = math.log10(phi_lo), math.log10(phi_hi)
+    target = max(float(p.J_exp), tiny)
+
+    J_lo, J_hi = J_of_phi(10.0**log_lo), J_of_phi(10.0**log_hi)
+    if (J_lo - target) * (J_hi - target) > 0.0:
+        if J_lo < target and J_hi < target:
+            log_hi += 1.0
+            J_hi = J_of_phi(10.0**log_hi)
+        elif J_lo > target and J_hi > target:
+            log_lo -= 1.0
+            J_lo = J_of_phi(10.0**log_lo)
+
+    for _ in range(maxit):
+        log_mid = 0.5 * (log_lo + log_hi)
+        J_mid = J_of_phi(10.0**log_mid)
+        if abs(log_hi - log_lo) < tol_log:
+            q.put(10.0**log_mid)
+            return
+        if (J_lo - target) * (J_mid - target) <= 0.0:
+            log_hi, J_hi = log_mid, J_mid
+        else:
+            log_lo, J_lo = log_mid, J_mid
+    q.put(10.0 ** (0.5 * (log_lo + log_hi)))
+
+
+def _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel) -> float:
+    ctx = mp.get_context("spawn")
+    q = ctx.SimpleQueue()
+    p_dict = {
+        "case": p.case,
+        "T_C": p.T_C,
+        "T_K": p.T_K,
+        "run": p.run,
+        "P_up": p.P_up,
+        "P_down": p.P_down,
+        "P_gb": p.P_gb,
+        "y_ft": p.y_ft,
+        "J_exp": p.J_exp,
+    }
+    proc = ctx.Process(
+        target=_invert_point_child,
+        args=(p_dict, D_flibe, D_nickel, K_S_nickel, q),
+        daemon=False,
+    )
+    proc.start()
+    phi_T = q.get()
+    proc.join()
+    return float(phi_T)
+
+
 def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
-    invT_by_case, lnphi_by_case, sig_ln_by_case, meta_by_case = {}, {}, {}, {}
-    metrics_by_case = {}  # NEW (for J_fit & errors)
+    invT_by_case, lnphi_by_case, sig_ln_by_case, meta_by_case, metrics_by_case = (
+        {},
+        {},
+        {},
+        {},
+        {},
+    )
 
     for case_name in sorted({p.case for p in pts}):
-        invT_list, lnphi_list, sig_list, meta_rows = [], [], [], []
-        metrics_rows = []  # NEW
+        invT_list, lnphi_list, sig_list, meta_rows, metrics_rows = [], [], [], [], []
 
         for p in [pp for pp in pts if pp.case == case_name]:
             phi_T = _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel)
             tiny = np.finfo(float).tiny
-
-            # reusable evaluation helper
-            def run_once_safe(
-                case,
-                T_K,
-                P_up,
-                P_down,
-                D_flibe,
-                D_nickel,
-                perm_loc,
-                K_S_nickel,
-                out_bc,
-                y_ft,
-            ):
-                # keep isolation only for "normal_*" to match your previous pattern
-                if case.startswith("normal"):
-                    return run_once_isolated(
-                        case,
-                        T_K,
-                        P_up,
-                        P_down,
-                        D_flibe,
-                        D_nickel,
-                        perm_loc,
-                        K_S_nickel,
-                        out_bc,
-                        y_ft,
-                    )
-                return run_once(
-                    case,
-                    T_K,
-                    P_up,
-                    P_down,
-                    D_flibe,
-                    D_nickel,
-                    perm_loc,
-                    K_S_nickel,
-                    out_bc,
-                    y_ft,
-                )
 
             def J_of_phi(phi_val: float) -> float:
                 perm_loc = htm.Permeability(
@@ -673,8 +574,7 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
                     if p.P_gb is not None
                     else {"type": "particle_flux_zero"}
                 )
-                out = run_once_safe(
-                    p.case,
+                out = run_once(
                     p.T_K,
                     p.P_up,
                     p.P_down,
@@ -685,9 +585,9 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
                     out_bc_p,
                     p.y_ft,
                 )
-                return float(out["total_out"])
+                return max(float(out), tiny)
 
-            # modeled flux at solved φ & errors
+            # modeled flux (at solved φ) and errors vs experiment
             J_fit = J_of_phi(phi_T)
             J_exp = max(float(p.J_exp), tiny)
             err_abs = J_fit - J_exp
@@ -720,51 +620,74 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
             )
 
             if _RANK0:
-                print(
+                # Optional quick console summary
+                line = (
                     f"[{p.case}] T={p.T_C:.0f}°C {p.run}: "
                     f"J_exp={J_exp:.3e}, J_fit={J_fit:.3e}, rel_err={err_rel * 100:.2f}%"
                 )
+
+                # append it to a log file
+                log_dir = Path("exports") / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_file = log_dir / "fit_summary.txt"
+                with log_file.open("a") as f:
+                    f.write(line + "\n")
 
         invT_by_case[case_name] = np.array(invT_list, float)
         lnphi_by_case[case_name] = np.array(lnphi_list, float)
         sig_ln_by_case[case_name] = np.array(sig_list, float)
         meta_by_case[case_name] = meta_rows
-        metrics_by_case[case_name] = metrics_rows  # NEW
+        metrics_by_case[case_name] = metrics_rows
 
-    return invT_by_case, lnphi_by_case, sig_ln_by_case, meta_by_case, metrics_by_case
+    return (
+        invT_by_case,
+        lnphi_by_case,
+        sig_ln_by_case,
+        meta_by_case,
+        metrics_by_case,
+    )
 
 
 def _fit_lnphi(invT, lnphi, sigma_ln=None):
     """
     Weighted least squares fit: lnφ = a + b * (1/T).
-    Returns (a, b, Phi0, E, band).
+    Returns (a, b, Phi0, E, band) where band(x) -> (ylo, yhi) is a
+    95% CI on the fitted mean ŷ(x) using WLS covariance.
     """
     x = np.asarray(invT, float)
     y = np.asarray(lnphi, float)
 
+    # weights: default to 1; if sigma provided, use 1/sigma^2
     if sigma_ln is not None:
         s = np.asarray(sigma_ln, float)
         w = np.where(np.isfinite(s) & (s > 0.0), 1.0 / (s * s), 1.0)
     else:
         w = np.ones_like(x)
 
+    # design matrix and weight matrix
     X = np.column_stack((np.ones_like(x), x))  # [1, x]
     W = np.diag(w)
+
+    # beta = (X^T W X)^(-1) X^T W y
     XtW = X.T @ W
     XtWX = XtW @ X
     XtWy = XtW @ y
-    XtWX_inv = np.linalg.pinv(XtWX)
+    XtWX_inv = np.linalg.pinv(XtWX)  # robust inverse
     beta = XtWX_inv @ XtWy
     a, b = float(beta[0]), float(beta[1])
 
+    # Arrhenius parameters
     Phi0 = float(np.exp(a))
     E = float(-b * kB_eV)
 
+    # residuals and weighted RSS
     r = y - (a + b * x)
     n, p = X.shape
     dof = max(n - p, 1)
     RSS_w = float(np.sum(w * r * r))
-    s2 = RSS_w / dof
+    s2 = RSS_w / dof  # variance estimate
+
+    # covariance of coefficients (WLS)
     cov_beta = s2 * XtWX_inv
 
     def band(xq, z=1.96):
@@ -772,6 +695,7 @@ def _fit_lnphi(invT, lnphi, sigma_ln=None):
         yhat = a + b * xq
         v0 = np.ones_like(xq)
         v1 = xq
+        # var(yhat) = [v]^T cov_beta [v], with v = [1, x]
         var = (
             cov_beta[0, 0] * v0 * v0
             + 2.0 * cov_beta[0, 1] * v0 * v1
@@ -786,8 +710,9 @@ def _fit_lnphi(invT, lnphi, sigma_ln=None):
 
 def _save_inverted_points_csv(outdir, rows):
     """
-    rows include: case, run, T_C, T_K, invT, ln_phi, sigma_lnphi, phi, sigma_phi,
-                  J_exp, sigma_J, J_fit, err_abs, err_rel
+    rows: list of dicts with keys:
+      case, run, T_C, T_K, invT, ln_phi, sigma_lnphi, phi, sigma_phi,
+      J_exp, sigma_J, J_fit, err_abs, err_rel
     """
     outdir.mkdir(parents=True, exist_ok=True)
     import csv
@@ -821,6 +746,9 @@ def _save_inverted_points_csv(outdir, rows):
 
 
 def _save_fitted_params_csv(outdir, fit_info):
+    """
+    fit_info: dict[case] -> dict(Phi0, E, R2)
+    """
     outdir.mkdir(parents=True, exist_ok=True)
     import csv
 
@@ -834,132 +762,6 @@ def _save_fitted_params_csv(outdir, fit_info):
         print(f"[saved] {csv_path}")
 
 
-def _child_run_once(args, q):
-    (
-        case,
-        T_K,
-        P_up,
-        P_down,
-        D_flibe,
-        D_nickel,
-        permeability_flibe,
-        K_S_nickel,
-        out_bc,
-        y_ft,
-    ) = args
-    try:
-        out = run_once(
-            case,
-            T_K,
-            P_up,
-            P_down,
-            D_flibe,
-            D_nickel,
-            permeability_flibe,
-            K_S_nickel,
-            out_bc,
-            y_ft,
-        )
-        q.put(("ok", out))
-    except Exception as e:
-        q.put(("err", repr(e)))
-
-
-def run_once_isolated(
-    case,
-    T_K,
-    P_up,
-    P_down,
-    D_flibe,
-    D_nickel,
-    permeability_flibe,
-    K_S_nickel,
-    out_bc,
-    y_ft,
-):
-    ctx = mp.get_context("spawn")
-    q = ctx.SimpleQueue()
-    p = ctx.Process(
-        target=_child_run_once,
-        args=(
-            (
-                case,
-                T_K,
-                P_up,
-                P_down,
-                D_flibe,
-                D_nickel,
-                permeability_flibe,
-                K_S_nickel,
-                out_bc,
-                y_ft,
-            ),
-            q,
-        ),
-        daemon=False,
-    )
-    p.start()
-    status, payload = q.get()
-    p.join()
-    if status == "err":
-        raise RuntimeError(f"child solve failed: {payload}")
-    return payload
-
-
-def run_once(
-    case: str,
-    T_K: float,
-    P_up: float,
-    P_down: float,
-    D_flibe,
-    D_nickel,
-    permeability_flibe,
-    K_S_nickel,
-    out_bc: dict | None = None,
-    y_ft: float | None = None,
-):
-    my_model, fluxes_dict = make_model(
-        temperature=T_K,
-        D_flibe=D_flibe,
-        D_nickel=D_nickel,
-        permeability_flibe=permeability_flibe,
-        K_S_nickel=K_S_nickel,
-        P_up=P_up,
-        case=case,
-        P_down=P_down,
-        out_bc=out_bc,
-        y_ft=y_ft,
-    )
-    my_model.initialise()
-    my_model.run()
-
-    flux_objects = fluxes_dict["flux_by_label"]
-    six_labels = fluxes_dict["six_labels"]
-    vals_six = {label: _get_flux_value(flux_objects[label]) for label in six_labels}
-    glovebox_val = float(_get_flux_value(fluxes_dict["glovebox_flux"]))
-
-    up_labels = fluxes_dict["up_labels"]
-    down_labels = fluxes_dict["down_labels"]
-    total_up = float(np.sum([vals_six[label] for label in up_labels], dtype=float))
-    total_down = float(np.sum([vals_six[label] for label in down_labels], dtype=float))
-    _dispose_model(my_model)
-
-    per_surface = {
-        "labels": six_labels,
-        "values": [vals_six[label] for label in six_labels],
-        "up_labels": up_labels,
-        "down_labels": down_labels,
-        "up_vals": [vals_six[label] for label in up_labels],
-        "down_vals": [vals_six[label] for label in down_labels],
-    }
-    return dict(
-        total_in=total_up,
-        glovebox=glovebox_val,
-        total_out=total_down,
-        per_surface=per_surface,
-    )
-
-
 def make_dual_overlay_lnphi(
     cases,
     T2K,
@@ -970,7 +772,6 @@ def make_dual_overlay_lnphi(
     outdir: Path,
     title_suffix="SWAP configuration",
     save_csv: bool = True,
-    SHOW_JITTER: bool = False,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -983,8 +784,6 @@ def make_dual_overlay_lnphi(
     )
 
     # ---- style maps
-    import matplotlib as mpl
-
     bc_names = list(invT_by.keys())
     palette = mpl.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1", "C2"])
     bc_colors = {
@@ -1000,8 +799,10 @@ def make_dual_overlay_lnphi(
 
     # ==== plotting section  ====
     fig, ax = plt.subplots(figsize=(8, 5.2))
+    # Leave extra headroom for an outside legend + suptitle
     fig.subplots_adjust(top=0.80, bottom=0.25)
 
+    # --- Plot points with error bars and run-dependent markers
     MS = 5
     CAP = MS
     ELW = 0.9
@@ -1017,8 +818,9 @@ def make_dual_overlay_lnphi(
         unique_runs = sorted({m.run for m in metas})
         for rname in unique_runs:
             sel = np.array([m.run == rname for m in metas])
-            x, y = invT[sel], lnphi[sel]
-            ysig = np.where(np.isfinite(sig[sel]) & (sig[sel] > 0), sig[sel], 0)
+            x = 1000 * invT[sel]  # scale to 1000 / K for better readability
+            y = np.exp(lnphi[sel])
+            ysig = np.where(np.isfinite(sig[sel]) & (sig[sel] > 0), y * sig[sel], 0)
 
             ax.errorbar(
                 x,
@@ -1045,7 +847,7 @@ def make_dual_overlay_lnphi(
                 zorder=4.0,
             )
 
-    # --- Fit lines and dashed bounds
+    # --- Fit lines + dashed CI
     fit_info = {}
     for name in invT_by:
         a, b, Phi0, E, band = _fit_lnphi(
@@ -1058,21 +860,26 @@ def make_dual_overlay_lnphi(
         fit_info[name] = dict(a=a, b=b, Phi0=Phi0, E=E, R2=R2, band=band)
 
         xx = np.linspace(invT_by[name].min(), invT_by[name].max(), 200)
+        xx_plot = 1000 * xx  # scale to 1000 / K for better readability
         yy = fit_info[name]["a"] + fit_info[name]["b"] * xx
+        yy_plot = np.exp(yy)
         lo, hi = fit_info[name]["band"](xx)
+        plot_lo = np.exp(lo)
+        plot_hi = np.exp(hi)
         c = bc_colors.get(name, "C0")
 
-        ax.plot(xx, yy, color=c, lw=2, label=f"{name} fit", zorder=3.5)
-        ax.plot(xx, lo, color=c, lw=1.0, ls="--", alpha=0.8)
-        ax.plot(xx, hi, color=c, lw=1.0, ls="--", alpha=0.8)
+        ax.plot(xx_plot, yy_plot, color=c, lw=2, label=f"{name} fit", zorder=3.5)
+        ax.plot(xx_plot, plot_lo, color=c, lw=1.0, ls="--", alpha=0.8)
+        ax.plot(xx_plot, plot_hi, color=c, lw=1.0, ls="--", alpha=0.8)
 
-    # --- Axes, legends, labels
-    ax.set_xlabel("1 / T [1/K]")
-    ax.set_ylabel("ln φ  [ln(H·m⁻¹·s⁻¹·Pa⁻¹)]")
+    # --- Axes, legends, and labels
+    ax.set_xlabel("1000 / T [1/K]")
+    ax.set_yscale("log")
+    ax.set_ylabel("φ  [H·m⁻¹·s⁻¹·Pa⁻¹]")
     ax.grid(True, alpha=0.3)
-    fig.suptitle(f"Pointwise inversion across BCs — {title_suffix}", y=0.98)
 
-    from matplotlib.lines import Line2D
+    # Title placed as figure-level suptitle to avoid overlap with legend
+    fig.suptitle(f"Pointwise inversion across BCs — {title_suffix}", y=0.98)
 
     bc_handles = [
         Line2D([0], [0], color=bc_colors[n], lw=2, label=f"{n} fit") for n in bc_names
@@ -1091,6 +898,8 @@ def make_dual_overlay_lnphi(
         for r in sorted(run_marker.keys())
     ]
     handles = bc_handles + run_handles
+
+    # Legend outside, above the axes (under the suptitle)
     ax.legend(
         handles=handles,
         loc="upper center",
@@ -1105,7 +914,7 @@ def make_dual_overlay_lnphi(
 
     _ensure_and_save(fig, outdir / "dual_pointwise_lnphi_invT.png")
 
-    # ---- CSV exports (with J_fit and errors)
+    # ---- CSV exports
     if save_csv:
         rows = []
         for case_name in invT_by:
@@ -1113,7 +922,7 @@ def make_dual_overlay_lnphi(
             invT = invT_by[case_name]
             lnphi = lnphi_by[case_name]
             sig = sig_by[case_name]
-            mets = metrics_by[case_name]
+            mets = metrics_by[case_name]  # NEW
             for i, p in enumerate(metas):
                 s_ln = (
                     float(sig[i])
@@ -1136,9 +945,9 @@ def make_dual_overlay_lnphi(
                         sigma_phi=s_phi,
                         J_exp=p.J_exp,
                         sigma_J=(0.0 if sJ is None else float(sJ)),
-                        J_fit=mets[i]["J_fit"],
-                        err_abs=mets[i]["err_abs"],
-                        err_rel=mets[i]["err_rel"],
+                        J_fit=mets[i]["J_fit"],  # NEW
+                        err_abs=mets[i]["err_abs"],  # NEW
+                        err_rel=mets[i]["err_rel"],  # NEW
                     )
                 )
         _save_inverted_points_csv(outdir, rows)
@@ -1157,7 +966,6 @@ def make_dual_overlay_lnphi(
 if __name__ == "__main__":
     set_log_level(LogLevel.WARNING)
 
-    # Materials
     diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(
         isotope="h"
     )
@@ -1166,8 +974,7 @@ if __name__ == "__main__":
     K_S_nickel = solubilities_nickel[1]
     D_flibe = htm.Diffusivity(D_0=2.5e-7, E_D=0.24)
 
-    # Temps and y_ft
-    temps_C_all = [500.0, 550.0, 600.0, 700.0]
+    temps_C_all = [500.0, 550.0, 600.0, 650.0, 700.0]
     T2K = {Tc: Tc + 273.15 for Tc in temps_C_all}
     Y_FT_BY_TEMP_C = {
         500.0: 0.02914,
@@ -1176,39 +983,40 @@ if __name__ == "__main__":
         650.0: 0.02930,
         700.0: 0.02936,
     }
+
     # ---- SWAP input tables
     swap_infinite = {
         500.0: {
             "runs": {
-                # "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
+                "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
                 "Run 2": {"P_up": 1.31e5, "P_down": 1.99e1, "J_exp": 4.34e15},
             }
         },
         550.0: {
             "runs": {
-                # "Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15},
+                "Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15},
                 "Run 2": {"P_up": 1.31e5, "P_down": 3.89e1, "J_exp": 8.58e15},
             }
         },
         600.0: {
             "runs": {
-                # "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
+                "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
             }
         },
-        # 700.0: {
-        #     "runs": {"Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15}}
-        # },
+        700.0: {
+            "runs": {"Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15}}
+        },
     }
     swap_transparent = {
         500.0: {
             "runs": {
-                # "Run 1": {
-                #     "P_up": 1.31e5,
-                #     "P_down": 1.77e1,
-                #     "P_gb": 7.0,
-                #     "J_exp": 3.89e15,
-                # },
+                "Run 1": {
+                    "P_up": 1.31e5,
+                    "P_down": 1.77e1,
+                    "P_gb": 7.0,
+                    "J_exp": 3.89e15,
+                },
                 "Run 2": {
                     "P_up": 1.31e5,
                     "P_down": 3.89e1,
@@ -1219,12 +1027,12 @@ if __name__ == "__main__":
         },
         550.0: {
             "runs": {
-                # "Run 1": {
-                #     "P_up": 1.31e5,
-                #     "P_down": 3.21e1,
-                #     "P_gb": 1.0e1,
-                #     "J_exp": 7.20e15,
-                # },
+                "Run 1": {
+                    "P_up": 1.31e5,
+                    "P_down": 3.21e1,
+                    "P_gb": 1.0e1,
+                    "J_exp": 7.20e15,
+                },
                 "Run 2": {
                     "P_up": 1.31e5,
                     "P_down": 3.89e1,
@@ -1235,12 +1043,12 @@ if __name__ == "__main__":
         },
         600.0: {
             "runs": {
-                # "Run 1": {
-                #     "P_up": 1.33e5,
-                #     "P_down": 3.57e1,
-                #     "P_gb": 1.2e1,
-                #     "J_exp": 7.64e15,
-                # },
+                "Run 1": {
+                    "P_up": 1.33e5,
+                    "P_down": 3.57e1,
+                    "P_gb": 1.2e1,
+                    "J_exp": 7.64e15,
+                },
                 "Run 2": {
                     "P_up": 1.32e5,
                     "P_down": 4.62e1,
@@ -1249,29 +1057,28 @@ if __name__ == "__main__":
                 },
             }
         },
-        # 700.0: {
-        #     "runs": {
-        #         "Run 1": {
-        #             "P_up": 1.32e5,
-        #             "P_down": 4.07e1,
-        #             "P_gb": 2.2e1,
-        #             "J_exp": 9.04e15,
-        #         }
-        #     }
-        # },
+        700.0: {
+            "runs": {
+                "Run 1": {
+                    "P_up": 1.32e5,
+                    "P_down": 4.07e1,
+                    "P_gb": 2.2e1,
+                    "J_exp": 9.04e15,
+                }
+            }
+        },
     }
 
     cases = {
         "swap_infinite": {"table": swap_infinite, "out_mode": "particle_flux_zero"},
         "swap_transparent": {"table": swap_transparent, "out_mode": "sieverts"},
     }
-
     outdir = Path("exports") / "figs" / "calibration_A" / "SWAP_bundle"
     fit_params = make_dual_overlay_lnphi(
         cases=cases,
         T2K=T2K,
         Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
-        D_flibe=D_flibe,
+        D_flibe=htm.Diffusivity(D_0=2.5e-7, E_D=0.24),
         D_nickel=D_nickel,
         K_S_nickel=K_S_nickel,
         outdir=outdir,
