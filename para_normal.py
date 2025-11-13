@@ -235,7 +235,7 @@ def make_model(
         for s in [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
     ]
     downstream_bcs = [
-        F.SievertsBC(subdomain=s, species=H, pressure=5.0, S_0=K_S_0_Ni, E_S=E_S_Ni)
+        F.SievertsBC(subdomain=s, species=H, pressure=P_down, S_0=K_S_0_Ni, E_S=E_S_Ni)
         for s in [top_cap_Ni, top_sidewall_Ni]
     ] + [
         F.HenrysBC(
