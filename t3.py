@@ -1,7 +1,7 @@
 from mesh import generate_mesh
 from dolfinx.log import set_log_level, LogLevel
 from cylindrical_flux import CylindricalFlux
-from dolfinx.io import gmshio
+from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 import festim as F
 import h_transport_materials as htm
@@ -14,9 +14,11 @@ set_log_level(LogLevel.INFO)
 
 generate_mesh(mesh_size=2e-4)
 model_rank = 0
-mesh, cell_tags, facet_tags = gmshio.read_from_msh(
-    "mesh.msh", MPI.COMM_WORLD, model_rank
-)
+_read = gmshio.read_from_msh("mesh.msh", MPI.COMM_WORLD, model_rank)
+mesh = _read.mesh
+cell_tags = _read.cell_tags
+facet_tags = _read.facet_tags
+
 
 # filter nickel and H
 diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(isotope="h")
@@ -100,7 +102,7 @@ my_model.subdomains = [
     left_bc_top_Ni,
     left_bc_middle_Ni,
     left_bc_bottom_Ni,
-     top_cap_Ni,
+    top_cap_Ni,
     top_sidewall_Ni,
     bottom_sidewall_Ni,
     liquid_surface,
@@ -135,8 +137,8 @@ my_model.species = [H]
 my_model.temperature = 773
 
 upstream_volume_surfaces = [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
-downstream_volume_surfaces_Ni = [ top_cap_Ni, top_sidewall_Ni]
-downstream_volume_surfaces = [ top_cap_Ni, top_sidewall_Ni, liquid_surface]
+downstream_volume_surfaces_Ni = [top_cap_Ni, top_sidewall_Ni]
+downstream_volume_surfaces = [top_cap_Ni, top_sidewall_Ni, liquid_surface]
 
 # constant upstream pressure
 P_up = 1.11e5  # Pa
