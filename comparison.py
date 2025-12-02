@@ -14,6 +14,7 @@ import matplotlib
 import gc
 from petsc4py import PETSc
 import multiprocessing as mp
+import csv
 
 try:
     mp.set_start_method("spawn")
@@ -908,107 +909,6 @@ def save_breakdown(fig, outdir: Path, stem: str):
     _ensure_and_save(fig, outdir / f"{stem}.png")
 
 
-def plot_case_breakdowns_with_exp(
-    case_name: str,
-    case_cfg: Dict,
-    T2K: Dict[float, float],
-    Y_FT_BY_TEMP_C: Dict[float, float],
-    D_flibe,
-    permeability_flibe_fitted,
-    D_nickel,
-    K_S_nickel,
-    outdir_root: Path = Path("exports") / "figs" / "calibration_A",
-):
-    table = case_cfg.get("table", {})
-    case_outdir = outdir_root / case_name
-    _ensure_dir(case_outdir)
-
-    for Tc in sorted(table.keys()):
-        Tk = T2K[Tc]
-        y_val = Y_FT_BY_TEMP_C.get(Tc, list(Y_FT_BY_TEMP_C.values())[-1])
-        y_ft = float(f"{float(y_val):.5f}")
-
-        runs = table[Tc].get("runs", {})
-        for run_name, cond in runs.items():
-            out_bc = (
-                {"type": "sieverts", "pressure": float(cond.get("P_gb", 0.0))}
-                if "P_gb" in cond
-                else {"type": "particle_flux_zero"}
-            )
-            res = run_once(
-                case=case_name,
-                T_K=Tk,
-                P_up=float(cond["P_up"]),
-                P_down=float(cond["P_down"]),
-                D_flibe=D_flibe,
-                D_nickel=D_nickel,
-                K_S_nickel=K_S_nickel,
-                permeability_flibe=permeability_flibe_fitted,
-                out_bc=out_bc,
-                y_ft=y_ft,
-            )
-
-            per = res["per_surface"]
-            six_labels = per["labels"]
-            six_values = [float(v) for v in per["values"]]
-            values = [
-                float(cond["J_exp"]),
-                float(res["total_in"]),
-                float(res["total_out"]),
-                float(res["glovebox"]),
-            ] + six_values
-            labels = ["Flux exp", "Flux in", "Flux out", "Glovebox"] + list(six_labels)
-
-            fig, ax = plt.subplots(figsize=(13, 6))
-            x = np.arange(len(labels), dtype=float)
-            bars = ax.bar(x, np.abs(values))
-            for bar, v in zip(bars, values):
-                h = bar.get_height()
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2.0,
-                    (h if h > 0 else 0.0) * 1.02 + (1e-30 if h == 0 else 0),
-                    f"{v:.2e}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=9,
-                )
-
-            ax.set_xticks(x)
-            ax.set_xticklabels(labels, rotation=25, ha="right")
-            ax.set_ylabel("Flux [H/s]")
-            ax.set_title(
-                f"{case_name} — {run_name} — {int(Tc)} °C  (y_ft={float(y_ft):.5f} m)"
-            )
-            info = (
-                f"Case: {case_name}\nRun: {run_name}\nT = {int(Tc)} °C (T_K={Tk:.2f})\n"
-                f"y_ft = {float(y_ft):.5f} m\nP_up = {float(cond['P_up']):.2e} Pa\n"
-                f"P_down = {float(cond['P_down']):.2e} Pa\n"
-                + (
-                    f"P_glovebox = {float(cond['P_gb']):.2e} Pa"
-                    if "P_gb" in cond
-                    else "P_glovebox = (closed)"
-                )
-            )
-            ax.text(
-                0.99,
-                0.98,
-                info,
-                transform=ax.transAxes,
-                ha="right",
-                va="top",
-                bbox=dict(boxstyle="round", fc="white", alpha=0.85, lw=0.5),
-            )
-            ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
-            fig.tight_layout()
-
-            fd = fig_saving(case_name, int(Tc), run_name)
-            save_breakdown(
-                fig,
-                fd,
-                stem=f"{case_name}_{int(Tc)}C_{run_name}_breakdown_exp_vs_model",
-            )
-
-
 def plot_breakdowns_all_cases(
     cases: Dict,
     T2K: Dict[float, float],
@@ -1025,7 +925,6 @@ def plot_breakdowns_all_cases(
 
         [J_exp, total_in, total_out, glovebox, individual surfaces...]
 
-    using the *same style* as plot_case_breakdowns_with_exp, but
     with permeability chosen per (case, T, run) via get_permeability_for_run().
     """
     for case_name, case_cfg in cases.items():
@@ -1071,7 +970,6 @@ def plot_breakdowns_all_cases(
                     y_ft=y_ft,
                 )
 
-                # --- identical plotting style to plot_case_breakdowns_with_exp ---
                 per = res["per_surface"]
                 six_labels = per["labels"]
                 six_values = [float(v) for v in per["values"]]
@@ -1914,12 +1812,38 @@ if __name__ == "__main__":
 
     if _RANK0:
         print("\n===== Sim vs Exp (J_sim = total_out) =====")
-        for r in all_results:
-            print(
-                f"{r['case']:>18s} | T={r['T_C']:5.1f} °C | {r['run']:>5s} | "
-                f"phi0={r['phi0']:.3e} | E={r['E']:.3f} eV | "
-                f"J_sim={r['J_sim']:.3e} | J_exp={r['J_exp']:.3e}"
-            )
+
+        # Define CSV output path
+        csv_outdir = Path("exports") / "2Dcomparison"
+        csv_outdir.mkdir(parents=True, exist_ok=True)
+        csv_path = csv_outdir / "sim_vs_exp.csv"
+
+        # Open CSV file and write all rows
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            # Header row
+            writer.writerow(["case", "T_C", "run", "phi0", "E_eV", "J_sim", "J_exp"])
+
+            for r in all_results:
+                # Keep the original console print
+                print(
+                    f"{r['case']:>18s} | T={r['T_C']:5.1f} °C | {r['run']:>5s} | "
+                    f"phi0={r['phi0']:.3e} | E={r['E']:.3f} eV | "
+                    f"J_sim={r['J_sim']:.3e} | J_exp={r['J_exp']:.3e}"
+                )
+
+                # Write one row into the CSV file
+                writer.writerow(
+                    [
+                        r["case"],
+                        f"{r['T_C']:.1f}",
+                        r["run"],
+                        r["phi0"],
+                        r["E"],
+                        r["J_sim"],
+                        r["J_exp"],
+                    ]
+                )
 
     # 1) J_sim bars + J_exp points with error bars
     plot_jsim_vs_jexp_with_errorbars(all_results)
