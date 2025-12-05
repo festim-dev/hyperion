@@ -488,8 +488,8 @@ def permability_by_case_name(
                 )
             else:
                 return htm.Permeability(
-                    pre_exp=41587400565660.95,
-                    act_energy=0.4655730255084721,
+                    pre_exp=865326598314.4625,
+                    act_energy=0.19467840373934114,
                     law="henry",
                 )
         elif case_name == "swap_transparent":
@@ -501,8 +501,8 @@ def permability_by_case_name(
                 )
             else:
                 return htm.Permeability(
-                    pre_exp=61674694703011.12,
-                    act_energy=0.4724257569796252,
+                    pre_exp=2231942286596.255,
+                    act_energy=0.2397094892704862,
                     law="henry",
                 )
     raise ValueError(f"Unknown case name for permeability: {case_name}")
@@ -689,13 +689,15 @@ exp_error_data = {
         500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
         550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
         600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
-        700.0: {"runs": {"Run 1": 1.99e14}},
+        650.0: {"runs": {"Run 2": 2.26e14}},
+        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
     },
     "swap_transparent": {
         500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
         550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
         600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
-        700.0: {"runs": {"Run 1": 1.99e14}},
+        650.0: {"runs": {"Run 2": 2.26e14}},
+        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
     },
 }
 
@@ -1687,8 +1689,14 @@ if __name__ == "__main__":
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
             }
         },
+        650.0: {
+            "runs": {"Run 2": {"P_up": 1.32e5, "P_down": 5.02e1, "J_exp": 1.10e16}}
+        },
         700.0: {
-            "runs": {"Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15}}
+            "runs": {
+                "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
+                "Run 2": {"P_up": 1.32e5, "P_down": 4.78e1, "J_exp": 1.04e16},
+            }
         },
     }
     swap_transparent = {
@@ -1740,6 +1748,16 @@ if __name__ == "__main__":
                 },
             }
         },
+        650.0: {
+            "runs": {
+                "Run 2": {
+                    "P_up": 1.32e5,
+                    "P_down": 5.02e1,
+                    "P_gb": 1.5e1,
+                    "J_exp": 1.10e16,
+                },
+            }
+        },
         700.0: {
             "runs": {
                 "Run 1": {
@@ -1747,7 +1765,13 @@ if __name__ == "__main__":
                     "P_down": 4.07e1,
                     "P_gb": 2.2e1,
                     "J_exp": 9.04e15,
-                }
+                },
+                "Run 2": {
+                    "P_up": 1.32e5,
+                    "P_down": 4.78e1,
+                    "P_gb": 2.2e1,
+                    "J_exp": 1.04e16,
+                },
             }
         },
     }
@@ -1782,7 +1806,7 @@ if __name__ == "__main__":
                 pre_exp=437941789378.1358, act_energy=0.1621177114636059, law="henry"
             ),
             "Run 2": htm.Permeability(
-                pre_exp=41587400565660.95, act_energy=0.4655730255084721, law="henry"
+                pre_exp=865326598314.4625, act_energy=0.19467840373934114, law="henry"
             ),
         },
         "swap_transparent": {
@@ -1790,7 +1814,7 @@ if __name__ == "__main__":
                 pre_exp=1670438225847.1777, act_energy=0.23510226611596444, law="henry"
             ),
             "Run 2": htm.Permeability(
-                pre_exp=61674694703011.12, act_energy=0.4724257569796252, law="henry"
+                pre_exp=2231942286596.255, act_energy=0.2397094892704862, law="henry"
             ),
         },
     }
