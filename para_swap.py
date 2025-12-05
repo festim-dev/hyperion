@@ -422,13 +422,15 @@ exp_error_data = {
         500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
         550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
         600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
-        700.0: {"runs": {"Run 1": 1.99e14}},
+        650.0: {"runs": {"Run 2": 2.26e14}},
+        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
     },
     "swap_transparent": {
         500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
         550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
         600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
-        700.0: {"runs": {"Run 1": 1.99e14}},
+        650.0: {"runs": {"Run 2": 2.26e14}},
+        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
     },
 }
 
@@ -550,6 +552,17 @@ def _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel) -> float:
 
 
 def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
+    """
+    Perform pointwise inversion for each experimental point and
+    group results by (case, run).
+
+    Returns:
+        invT_by_case:      dict[(case, run)] -> np.array of 1/T
+        lnphi_by_case:     dict[(case, run)] -> np.array of ln(phi)
+        sig_ln_by_case:    dict[(case, run)] -> np.array of sigma_lnphi
+        meta_by_case:      dict[(case, run)] -> list[CalibPoint]
+        metrics_by_case:   dict[(case, run)] -> list[dict(J_fit, err_abs, err_rel)]
+    """
     invT_by_case, lnphi_by_case, sig_ln_by_case, meta_by_case, metrics_by_case = (
         {},
         {},
@@ -558,10 +571,17 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
         {},
     )
 
-    for case_name in sorted({p.case for p in pts}):
+    # Loop over each (case, run) pair
+    case_run_pairs = sorted(
+        {(p.case, p.run) for p in pts},
+        key=lambda cr: (cr[0], cr[1]),
+    )
+
+    for case_name, run_name in case_run_pairs:
         invT_list, lnphi_list, sig_list, meta_rows, metrics_rows = [], [], [], [], []
 
-        for p in [pp for pp in pts if pp.case == case_name]:
+        # Select all points for this (case, run)
+        for p in [pp for pp in pts if pp.case == case_name and pp.run == run_name]:
             phi_T = _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel)
             tiny = np.finfo(float).tiny
 
@@ -620,24 +640,23 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
             )
 
             if _RANK0:
-                # Optional quick console summary
+                # console + log summary per (case, run)
                 line = (
-                    f"[{p.case}] T={p.T_C:.0f}°C {p.run}: "
+                    f"[{p.case} — {p.run}] T={p.T_C:.0f}°C: "
                     f"J_exp={J_exp:.3e}, J_fit={J_fit:.3e}, rel_err={err_rel * 100:.2f}%"
                 )
-
-                # append it to a log file
                 log_dir = Path("exports") / "logs"
                 log_dir.mkdir(parents=True, exist_ok=True)
                 log_file = log_dir / "fit_summary.txt"
                 with log_file.open("a") as f:
                     f.write(line + "\n")
 
-        invT_by_case[case_name] = np.array(invT_list, float)
-        lnphi_by_case[case_name] = np.array(lnphi_list, float)
-        sig_ln_by_case[case_name] = np.array(sig_list, float)
-        meta_by_case[case_name] = meta_rows
-        metrics_by_case[case_name] = metrics_rows
+        key = (case_name, run_name)
+        invT_by_case[key] = np.array(invT_list, float)
+        lnphi_by_case[key] = np.array(lnphi_list, float)
+        sig_ln_by_case[key] = np.array(sig_list, float)
+        meta_by_case[key] = meta_rows
+        metrics_by_case[key] = metrics_rows
 
     return (
         invT_by_case,
@@ -747,17 +766,31 @@ def _save_inverted_points_csv(outdir, rows):
 
 def _save_fitted_params_csv(outdir, fit_info):
     """
-    fit_info: dict[case] -> dict(Phi0, E, R2)
+    fit_info:
+        either dict[case] -> dict(Phi0, E, R2)
+        or     dict[(case, run)] -> dict(Phi0, E, R2)
     """
     outdir.mkdir(parents=True, exist_ok=True)
     import csv
 
     csv_path = outdir / "fitted_params.csv"
     with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["case", "phi0", "E_eV", "R2"])
+        w = csv.DictWriter(f, fieldnames=["case", "run", "phi0", "E_eV", "R2"])
         w.writeheader()
-        for k, v in fit_info.items():
-            w.writerow({"case": k, "phi0": v["Phi0"], "E_eV": v["E"], "R2": v["R2"]})
+        for key, v in fit_info.items():
+            if isinstance(key, tuple):
+                case_name, run_name = key
+            else:
+                case_name, run_name = key, ""  # backward compatibility
+            w.writerow(
+                {
+                    "case": case_name,
+                    "run": run_name,
+                    "phi0": v["Phi0"],
+                    "E_eV": v["E"],
+                    "R2": v["R2"],
+                }
+            )
     if _RANK0:
         print(f"[saved] {csv_path}")
 
@@ -784,13 +817,16 @@ def make_dual_overlay_lnphi(
     )
 
     # ---- style maps
-    bc_names = list(invT_by.keys())
+    # list of unique case names
+    case_names = sorted({case for (case, run) in invT_by.keys()})
+
     palette = mpl.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1", "C2"])
     bc_colors = {
         "swap_infinite": palette[0],
         "swap_transparent": palette[1],
     }
 
+    # all run names
     runs_all = sorted({p.run for plist in meta_by.values() for p in plist})
     base_markers = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
     run_marker = {
@@ -808,67 +844,72 @@ def make_dual_overlay_lnphi(
     ELW = 0.9
     MECW = 0.9
 
-    for case_name in invT_by:
+    # Each key here is (case_name, run_name)
+    for (case_name, run_name), invT in invT_by.items():
         color = bc_colors.get(case_name, "C0")
-        invT = invT_by[case_name]
-        lnphi = lnphi_by[case_name]
-        sig = sig_by[case_name]
-        metas = meta_by[case_name]
+        lnphi = lnphi_by[(case_name, run_name)]
+        sig = sig_by[(case_name, run_name)]
+        metas = meta_by[(case_name, run_name)]
 
-        unique_runs = sorted({m.run for m in metas})
-        for rname in unique_runs:
-            sel = np.array([m.run == rname for m in metas])
-            x = 1000 * invT[sel]  # scale to 1000 / K for better readability
-            y = np.exp(lnphi[sel])
-            ysig = np.where(np.isfinite(sig[sel]) & (sig[sel] > 0), y * sig[sel], 0)
+        x = 1000 * invT  # scale to 1000 / K for better readability
+        y = np.exp(lnphi)
+        ysig = np.where(np.isfinite(sig) & (sig > 0), y * sig, 0.0)
 
-            ax.errorbar(
-                x,
-                y,
-                yerr=ysig,
-                fmt="none",
-                ecolor=color,
-                elinewidth=ELW,
-                capsize=CAP,
-                capthick=ELW,
-                alpha=0.9,
-                zorder=2.5,
-            )
-            ax.plot(
-                x,
-                y,
-                linestyle="",
-                marker=run_marker[rname],
-                ms=MS,
-                mfc="white",
-                mec=color,
-                mew=MECW,
-                label=f"{case_name} — {rname}",
-                zorder=4.0,
-            )
-
-    # --- Fit lines + dashed CI
-    fit_info = {}
-    for name in invT_by:
-        a, b, Phi0, E, band = _fit_lnphi(
-            invT_by[name], lnphi_by[name], sigma_ln=sig_by[name]
+        # vertical error bars
+        ax.errorbar(
+            x,
+            y,
+            yerr=ysig,
+            fmt="none",
+            ecolor=color,
+            elinewidth=ELW,
+            capsize=CAP,
+            capthick=ELW,
+            alpha=0.9,
+            zorder=2.5,
         )
-        yhat = a + b * invT_by[name]
-        ss_res = np.sum((lnphi_by[name] - yhat) ** 2)
-        ss_tot = np.sum((lnphi_by[name] - np.mean(lnphi_by[name])) ** 2)
-        R2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-        fit_info[name] = dict(a=a, b=b, Phi0=Phi0, E=E, R2=R2, band=band)
+        # markers
+        ax.plot(
+            x,
+            y,
+            linestyle="",
+            marker=run_marker.get(run_name, "o"),
+            ms=MS,
+            mfc="white",
+            mec=color,
+            mew=MECW,
+            label=f"{case_name} — {run_name}",
+            zorder=4.0,
+        )
 
-        xx = np.linspace(invT_by[name].min(), invT_by[name].max(), 200)
+    # --- Fit lines + dashed CI: now per (case, run)
+    fit_info = {}
+    for (case_name, run_name), invT in invT_by.items():
+        key = (case_name, run_name)
+        a, b, Phi0, E, band = _fit_lnphi(invT, lnphi_by[key], sigma_ln=sig_by[key])
+        yhat = a + b * invT
+        ss_res = np.sum((lnphi_by[key] - yhat) ** 2)
+        ss_tot = np.sum((lnphi_by[key] - np.mean(lnphi_by[key])) ** 2)
+        R2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+        fit_info[key] = dict(a=a, b=b, Phi0=Phi0, E=E, R2=R2, band=band)
+
+        xx = np.linspace(invT.min(), invT.max(), 200)
         xx_plot = 1000 * xx  # scale to 1000 / K for better readability
-        yy = fit_info[name]["a"] + fit_info[name]["b"] * xx
+        yy = fit_info[key]["a"] + fit_info[key]["b"] * xx
         yy_plot = np.exp(yy)
-        lo, hi = fit_info[name]["band"](xx)
+        lo, hi = fit_info[key]["band"](xx)
         plot_lo = np.exp(lo)
         plot_hi = np.exp(hi)
-        c = bc_colors.get(name, "C0")
+        c = bc_colors.get(case_name, "C0")
 
-        ax.plot(xx_plot, yy_plot, color=c, lw=2, label=f"{name} fit", zorder=3.5)
+        ax.plot(
+            xx_plot,
+            yy_plot,
+            color=c,
+            lw=2,
+            label=f"{case_name} — {run_name} fit",
+            zorder=3.5,
+        )
         ax.plot(xx_plot, plot_lo, color=c, lw=1.0, ls="--", alpha=0.8)
         ax.plot(xx_plot, plot_hi, color=c, lw=1.0, ls="--", alpha=0.8)
 
@@ -881,8 +922,18 @@ def make_dual_overlay_lnphi(
     # Title placed as figure-level suptitle to avoid overlap with legend
     fig.suptitle(f"Pointwise inversion across BCs — {title_suffix}", y=0.98)
 
+    # Legend handles:
+    #  - one line style per case (color)
+    #  - one marker style per run
     bc_handles = [
-        Line2D([0], [0], color=bc_colors[n], lw=2, label=f"{n} fit") for n in bc_names
+        Line2D(
+            [0],
+            [0],
+            color=bc_colors.get(case, "C0"),
+            lw=2,
+            label=f"{case} fits",
+        )
+        for case in case_names
     ]
     run_handles = [
         Line2D(
@@ -895,7 +946,7 @@ def make_dual_overlay_lnphi(
             ms=MS,
             label=r,
         )
-        for r in sorted(run_marker.keys())
+        for r in runs_all
     ]
     handles = bc_handles + run_handles
 
@@ -917,12 +968,11 @@ def make_dual_overlay_lnphi(
     # ---- CSV exports
     if save_csv:
         rows = []
-        for case_name in invT_by:
-            metas = meta_by[case_name]
-            invT = invT_by[case_name]
-            lnphi = lnphi_by[case_name]
-            sig = sig_by[case_name]
-            mets = metrics_by[case_name]  # NEW
+        for (case_name, run_name), invT in invT_by.items():
+            metas = meta_by[(case_name, run_name)]
+            lnphi = lnphi_by[(case_name, run_name)]
+            sig = sig_by[(case_name, run_name)]
+            mets = metrics_by[(case_name, run_name)]
             for i, p in enumerate(metas):
                 s_ln = (
                     float(sig[i])
@@ -945,9 +995,9 @@ def make_dual_overlay_lnphi(
                         sigma_phi=s_phi,
                         J_exp=p.J_exp,
                         sigma_J=(0.0 if sJ is None else float(sJ)),
-                        J_fit=mets[i]["J_fit"],  # NEW
-                        err_abs=mets[i]["err_abs"],  # NEW
-                        err_rel=mets[i]["err_rel"],  # NEW
+                        J_fit=mets[i]["J_fit"],
+                        err_abs=mets[i]["err_abs"],
+                        err_rel=mets[i]["err_rel"],
                     )
                 )
         _save_inverted_points_csv(outdir, rows)
@@ -1004,8 +1054,14 @@ if __name__ == "__main__":
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
             }
         },
+        650.0: {
+            "runs": {"Run 2": {"P_up": 1.32e5, "P_down": 5.02e1, "J_exp": 1.10e16}}
+        },
         700.0: {
-            "runs": {"Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15}}
+            "runs": {
+                "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
+                "Run 2": {"P_up": 1.32e5, "P_down": 4.78e1, "J_exp": 1.04e16},
+            }
         },
     }
     swap_transparent = {
@@ -1057,6 +1113,16 @@ if __name__ == "__main__":
                 },
             }
         },
+        650.0: {
+            "runs": {
+                "Run 2": {
+                    "P_up": 1.32e5,
+                    "P_down": 5.02e1,
+                    "P_gb": 1.5e1,
+                    "J_exp": 1.10e16,
+                },
+            }
+        },
         700.0: {
             "runs": {
                 "Run 1": {
@@ -1064,7 +1130,13 @@ if __name__ == "__main__":
                     "P_down": 4.07e1,
                     "P_gb": 2.2e1,
                     "J_exp": 9.04e15,
-                }
+                },
+                "Run 2": {
+                    "P_up": 1.32e5,
+                    "P_down": 4.78e1,
+                    "P_gb": 2.2e1,
+                    "J_exp": 1.04e16,
+                },
             }
         },
     }
