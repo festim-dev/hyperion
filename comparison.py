@@ -563,7 +563,7 @@ def run_all_cases_with_custom_permeabilities(
     Returns flat list of dicts with sim vs exp flux and additional
     physical percentage metrics:
 
-      - pct_sidewall_leak_out  : inlet sidewall / outlet  [%]
+      - pct_sidewall_leak_out  : inlet sidewall / inlet  [%]
       - pct_sidewall_comp_out  : outlet sidewall / outlet [%]
       - pct_liq_mem_diff         : liquid-membrane difference / outlet [%]
     """
@@ -609,36 +609,42 @@ def run_all_cases_with_custom_permeabilities(
                     y_ft=y_ft,
                 )
 
-                # ---------- sidewall / liquid / membrane metrics (all normalized by OUTLET) ----------
+                # ---------- sidewall / liquid / membrane metrics ----------
                 per = res["per_surface"]
                 labels = per["labels"]
                 values = per["values"]
                 vals_dict = {lab: float(val) for lab, val in zip(labels, values)}
 
                 # magnitudes
-                J_out = abs(float(res["total_out"]))
-                J_top_sidewall = abs(vals_dict.get("top_sidewall_Ni", 0.0))
-                J_bottom_sidewall = abs(vals_dict.get("bottom_sidewall_Ni", 0.0))
+                J_in = abs(float(res["total_in"]))  # inlet
+                J_out = abs(float(res["total_out"]))  # outlet
+                # J_top_sidewall = abs(vals_dict.get("top_sidewall_Ni", 0.0))
+                # J_bottom_sidewall = abs(vals_dict.get("bottom_sidewall_Ni", 0.0))
                 J_liquid = abs(vals_dict.get("liquid_surface", 0.0))
                 J_membrane = abs(vals_dict.get("mid_membrane_Ni", 0.0))
 
                 # defaults
-                pct_sidewall_leak_out = float("nan")
-                pct_sidewall_comp_out = float("nan")
-                pct_liq_mem_diff = float("nan")
+                pct_sidewall_leak_out = float("nan")  # upstream sidewall / inlet
+                pct_sidewall_comp_out = float("nan")  # downstream sidewall / outlet
+                pct_liq_mem_diff = float("nan")  # still normalized by outlet
 
+                # ---- upstream sidewall leakage / inlet ----
+                if J_in > 0.0:
+                    if case_name.startswith("normal"):
+                        # inlet at bottom → upstream sidewall = bottom sidewall
+                        pct_sidewall_leak_out = 100.0 * (1 - J_membrane / J_in)
+                    elif case_name.startswith("swap"):
+                        # inlet at top → upstream sidewall = top sidewall
+                        pct_sidewall_leak_out = 100.0 * (1 - J_liquid / J_in)
+
+                # ---- downstream sidewall leakage / outlet ----
                 if J_out > 0.0:
                     if case_name.startswith("normal"):
-                        # inlet at bottom → leakage is bottom sidewall
-                        pct_sidewall_leak_out = 100.0 * J_bottom_sidewall / J_out
-                        # compensation is outlet at top
-                        pct_sidewall_comp_out = 100.0 * J_top_sidewall / J_out
-
+                        # outlet at top → downstream sidewall = top sidewall
+                        pct_sidewall_comp_out = 100.0 * (1 - J_liquid / J_out)
                     elif case_name.startswith("swap"):
-                        # inlet at top → leakage is top sidewall
-                        pct_sidewall_leak_out = 100.0 * J_top_sidewall / J_out
-                        # compensation at bottom sidewall
-                        pct_sidewall_comp_out = 100.0 * J_bottom_sidewall / J_out
+                        # outlet at bottom → downstream sidewall = bottom sidewall
+                        pct_sidewall_comp_out = 100.0 * (1 - J_membrane / J_out)
 
                     # liquid–membrane normalized by OUTLET
                     pct_liq_mem_diff = 100.0 * (J_liquid - J_membrane) / J_out
@@ -1466,7 +1472,7 @@ def _plot_percentage_by_type_case_run(
 
 def plot_inlet_leakage_sidewall(all_results: List[dict]):
     """
-    Inlet leakage to sidewall, normalized by inlet flux:
+    Upstream sidewall leakage, normalized by inlet flux:
 
       - normal: bottom sidewall / inlet
       - swap:   top sidewall    / inlet
@@ -1477,8 +1483,8 @@ def plot_inlet_leakage_sidewall(all_results: List[dict]):
     _plot_percentage_by_type_case_run(
         all_results=all_results,
         field="pct_sidewall_leak_out",
-        title_prefix="Inlet leakage to sidewall (normalized by outlet)",
-        ylabel="Sidewall leakage / outlet [%]",
+        title_prefix="Upstream sidewall leakage (normalized by inlet)",
+        ylabel="Upstream sidewall / inlet [%]",
         outdir_root=outdir_root,
         fname_suffix="inlet_leakage_sidewall",
         use_log=True,
@@ -1487,10 +1493,10 @@ def plot_inlet_leakage_sidewall(all_results: List[dict]):
 
 def plot_outlet_compensation_sidewall(all_results: List[dict]):
     """
-    Outlet compensation through sidewall, expressed as fraction of inlet:
+    Downstream sidewall leakage, normalized by outlet flux:
 
-      - normal: top sidewall    / inlet
-      - swap:   bottom sidewall / inlet
+      - normal: top sidewall    / outlet
+      - swap:   bottom sidewall / outlet
 
     One figure for NORMAL, one for SWAP.
     """
@@ -1498,8 +1504,8 @@ def plot_outlet_compensation_sidewall(all_results: List[dict]):
     _plot_percentage_by_type_case_run(
         all_results=all_results,
         field="pct_sidewall_comp_out",
-        title_prefix="Outlet sidewall flux (normalized by outlet)",
-        ylabel="Sidewall outlet / outlet [%]",
+        title_prefix="Downstream sidewall leakage (normalized by outlet)",
+        ylabel="Downstream sidewall / outlet [%]",
         outdir_root=outdir_root,
         fname_suffix="outlet_comp_sidewall",
         use_log=True,
