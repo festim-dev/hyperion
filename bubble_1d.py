@@ -5,6 +5,9 @@ from pathlib import Path
 import csv
 from typing import Dict, Optional
 import matplotlib.pyplot as plt
+import math
+import pandas as pd
+
 
 # ------------------------------ Temperature -> FLiBe thickness ------------------------------
 L_FLIBE_BY_TEMP_C: Dict[float, float] = {
@@ -12,8 +15,26 @@ L_FLIBE_BY_TEMP_C: Dict[float, float] = {
     # 550.0: 0.005194021,
     # 600.0: 0.005249337,
     650.0: 0.005305845,
-    # 700.0: 0.005363582,
+    700.0: 0.005363582,
 }
+
+J_exp_BY_TEMP_C: Dict[float, float] = {
+    500.0: 4.34e15,
+    550.0: 8.58e15,
+    600.0: 1.01e16,
+    650.0: 1.10e16,
+    700.0: 1.04e16,
+}
+
+
+def read_experimental_points(excel_path: Path, T_C: float):
+    sheet = f"{int(T_C)}C"
+    df = pd.read_excel(excel_path, sheet_name=sheet)
+
+    t_exp = df["time_s"].to_numpy(dtype=float)
+    J_exp = df["flux_Hps"].to_numpy(dtype=float)
+
+    return t_exp, J_exp
 
 
 def flibe_thickness_from_T_C(T_C: float) -> float:
@@ -54,6 +75,17 @@ def make_materials_ni_flibe(
         solubility_law="henry",
     )
     return mat_ni, mat_flibe, K_S_liquid
+
+
+def beta(t):
+    """
+    Bubble coverage factor.
+    """
+    t_val = float(t)
+    beta_inf = 0.6
+    tau = 30.0
+    # return beta_inf + (1.0 - beta_inf) * math.exp(-t_val / tau)
+    return 1.0
 
 
 # ------------------------------ Build model ------------------------------
@@ -131,12 +163,23 @@ def build_collapsed_1d(
     model.temperature = T_K
 
     # BCs: RIGHT is upstream on FLiBe
-    bc_right_upstream = F.HenrysBC(
+    # bc_right_upstream = F.HenrysBC(
+    #     subdomain=right_bc,
+    #     species=H,
+    #     pressure=P_up,
+    #     H_0=K_S_liquid.pre_exp.magnitude,
+    #     E_H=K_S_liquid.act_energy.magnitude,
+    # )
+    kB_eV = 8.617333262e-5
+
+    K_H_T = K_S_liquid.pre_exp.magnitude * math.exp(
+        -K_S_liquid.act_energy.magnitude / (kB_eV * T_K)
+    )
+
+    bc_right_upstream = F.FixedConcentrationBC(
         subdomain=right_bc,
         species=H,
-        pressure=P_up,
-        H_0=K_S_liquid.pre_exp.magnitude,
-        E_H=K_S_liquid.act_energy.magnitude,
+        value=lambda t: beta(t) * K_H_T * P_up,
     )
 
     # LEFT is downstream on Ni
@@ -214,6 +257,50 @@ def run_one_T(
     # total fluxes [H/s]
     J_downstream_left = np.asarray(j_left.data, dtype=float) * area
     J_upstream_right = np.asarray(j_right.data, dtype=float) * area
+
+    J_exp = J_exp_BY_TEMP_C[T_C]
+    s_T = J_exp / J_downstream_left[-1]
+
+    J_downstream_left *= s_T
+
+    J_model = np.asarray(j_left.data, dtype=float) * area
+
+    # ------------------ beta extraction from experimental points ------------------
+    excel_path = Path("experimental_data.xlsx")
+
+    if T_C in [650.0, 700.0]:
+        t_exp, J_exp = read_experimental_points(excel_path, T_C)
+
+        # interpolate model onto experimental times
+        J_model_at_exp = np.interp(t_exp, t, J_model)
+
+        # beta(t)
+        beta_exp = J_exp / (s_T * J_model_at_exp)
+
+        # save beta CSV
+        beta_dir = out_dir / "beta"
+        beta_dir.mkdir(parents=True, exist_ok=True)
+
+        beta_csv = beta_dir / f"T{int(T_C)}C_beta.csv"
+        with beta_csv.open("w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["time_s", "beta"])
+            for ti, bi in zip(t_exp, beta_exp):
+                w.writerow([ti, bi])
+
+        # plot beta(t)
+        plt.figure(figsize=(6, 4))
+        plt.scatter(t_exp, beta_exp, s=18)
+        plt.axhline(1.0, color="k", linestyle="--", linewidth=1)
+        plt.xlabel("Time [s]")
+        plt.ylabel("β(t)")
+        plt.title(f"Extracted β(t) at {int(T_C)} °C")
+        plt.grid(True)
+        plt.tight_layout()
+
+        beta_fig = beta_dir / f"T{int(T_C)}C_beta.png"
+        plt.savefig(beta_fig, dpi=300)
+        plt.close()
 
     # ---- plot downstream flux vs time ----
     fig_dir = out_dir / "figures"
