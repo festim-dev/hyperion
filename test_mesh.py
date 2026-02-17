@@ -14,8 +14,7 @@ def generate_mesh(mesh_size=2e-4, fname="2D.msh"):
     y_int = t_s
     # solid
     gmsh.model.occ.addRectangle(0.0, 0.0, 0.0, Lx, t_s, tag=1)
-
-    # liquid_left
+    # liquid
     gmsh.model.occ.addRectangle(0.0, y_int, 0.0, Lx, Htot - y_int, tag=2)
 
     gmsh.model.occ.fragment([(2, 1)], [(2, 2)])
