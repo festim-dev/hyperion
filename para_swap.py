@@ -419,18 +419,18 @@ def _collect_points_for_cases(
 # --- EXP error lookup ---
 exp_error_data = {
     "swap_infinite": {
-        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
+        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13, "Run 3": 4.90e13}},
         550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
-        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
+        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14, "Run 3": 1.01e14}},
         650.0: {"runs": {"Run 2": 2.26e14}},
-        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
+        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14, "Run 3": 1.52e14}},
     },
     "swap_transparent": {
-        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
+        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13, "Run 3": 4.90e13}},
         550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
-        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
+        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14, "Run 3": 1.01e14}},
         650.0: {"runs": {"Run 2": 2.26e14}},
-        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
+        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14, "Run 3": 1.52e14}},
     },
 }
 
@@ -1035,11 +1035,13 @@ if __name__ == "__main__":
     }
 
     # ---- SWAP input tables
+    # Note: run 3 is for D2, so we won't use it for fitting H data, but we keep it here for completeness and potential future use.
     swap_infinite = {
         500.0: {
             "runs": {
                 "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
                 "Run 2": {"P_up": 1.31e5, "P_down": 1.99e1, "J_exp": 4.34e15},
+                "Run 3": {"P_up": 1.31e5, "P_down": 8.66, "J_exp": 1.91e15},
             }
         },
         550.0: {
@@ -1052,6 +1054,7 @@ if __name__ == "__main__":
             "runs": {
                 "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
+                "Run 3": {"P_up": 1.33e5, "P_down": 2.10e1, "J_exp": 4.50e15},
             }
         },
         650.0: {
@@ -1061,6 +1064,7 @@ if __name__ == "__main__":
             "runs": {
                 "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.78e1, "J_exp": 1.04e16},
+                "Run 3": {"P_up": 1.31e5, "P_down": 3.230e1, "J_exp": 7.12e15},
             }
         },
     }
@@ -1078,6 +1082,12 @@ if __name__ == "__main__":
                     "P_down": 1.99e1,
                     "P_gb": 7.0,
                     "J_exp": 4.34e15,
+                },
+                "Run 3": {
+                    "P_up": 1.31e5,
+                    "P_down": 8.66,
+                    "P_gb": 7.0,
+                    "J_exp": 1.91e15,
                 },
             }
         },
@@ -1111,6 +1121,12 @@ if __name__ == "__main__":
                     "P_gb": 1.2e1,
                     "J_exp": 1.01e16,
                 },
+                "Run 3": {
+                    "P_up": 1.33e5,
+                    "P_down": 2.10e1,
+                    "P_gb": 1.2e1,
+                    "J_exp": 4.50e15,
+                },
             }
         },
         650.0: {
@@ -1136,6 +1152,12 @@ if __name__ == "__main__":
                     "P_down": 4.78e1,
                     "P_gb": 2.2e1,
                     "J_exp": 1.04e16,
+                },
+                "Run 3": {
+                    "P_up": 1.31e5,
+                    "P_down": 3.230e1,
+                    "P_gb": 2.2e1,
+                    "J_exp": 7.12e15,
                 },
             }
         },
