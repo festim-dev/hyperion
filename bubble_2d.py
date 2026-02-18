@@ -4,8 +4,7 @@ from dolfinx.io import gmsh as gmshio
 import festim as F
 
 import ufl
-from dolfinx import fem
-from dolfinx import geometry
+from dolfinx import fem, geometry
 from dolfinx.fem import assemble_scalar
 
 import matplotlib
@@ -14,9 +13,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import os
-import gc
-from petsc4py import PETSc
-
 
 OUTDIR = "plots"
 
@@ -37,11 +33,8 @@ def facet_measure(tag_id: int) -> float:
     return COMM.allreduce(val_local, op=MPI.SUM)
 
 
-L35 = facet_measure(35)  # liquid-gas surface (hole) length in 2D
-L36 = facet_measure(36)  # solid-gas surface (hole) length in 2D
-
-# if RANK == 0:
-#     print(f"L35={L35:.6e} m, L36={L36:.6e} m ")
+L35 = facet_measure(35)
+L36 = facet_measure(36)
 
 
 def T_label_from_temperature(T):
@@ -83,16 +76,13 @@ def read_last_row(csv_path):
 
 
 def eval_point_on_function(u, x: float, y: float) -> float:
-    pts = np.array([[x, y, 0.0]], dtype=np.float64)  # (1,3)
-
+    pts = np.array([[x, y, 0.0]], dtype=np.float64)
     tree = geometry.bb_tree(u.function_space.mesh, u.function_space.mesh.topology.dim)
     cand = geometry.compute_collisions_points(tree, pts)
     coll = geometry.compute_colliding_cells(u.function_space.mesh, cand, pts)
-
     links = coll.links(0)
     if len(links) == 0:
         return float("nan")
-
     cell = np.array([links[0]], dtype=np.int32)
     v = u.eval(pts, cell)
     return float(v.reshape(-1)[0])
@@ -115,7 +105,14 @@ def sample_4_points(H, liquid_volume, solid_volume, pts_dict):
     return c1, c2, c3, c4
 
 
-temperature = 773.15  # K
+POINTS = {
+    "liq_near_ls": (0.01, 0.00204),
+    "liq_near_lg": (0.039, 0.00304),
+    "sol_near_ls": (0.01, 0.00203),
+    "sol_near_sg": (0.039, 0.00203),
+}
+
+temperature = 773.15
 
 D_0_solid, E_D_solid = 3e-3, 0.2
 K_S_0_solid, E_K_S_solid = 4e-5, 0.2
@@ -123,18 +120,9 @@ K_S_0_solid, E_K_S_solid = 4e-5, 0.2
 D_0_liquid, E_D_liquid = 1e-5, 0.2
 K_S_0_liquid, E_K_S_liquid = 1e-5, 0.2
 
-
-# D_0_solid, E_D_solid = 3e-3, 1e-3
-# K_S_0_solid, E_K_S_solid = 4e-5, 1e-3
-
-# D_0_liquid, E_D_liquid = 1e-5, 1e-3
-# K_S_0_liquid, E_K_S_liquid = 1e-5, 1e-3
-
-
 P_top = 1e5
 P_bottom = 1e-3
-
-PENALTY = 1e5
+PENALTY = 1e4
 
 ATOL = 1e-10
 RTOL = 1e-8
@@ -163,113 +151,12 @@ liquid_gas_surface = F.SurfaceSubdomain(id=35)
 solid_gas_surface = F.SurfaceSubdomain(id=36)
 liquid_solid_interface = F.SurfaceSubdomain(id=101)
 
-
-def solve_for_pb(p_b: float):
-    my_model = F.HydrogenTransportProblemDiscontinuous()
-    my_model.mesh = F.Mesh(mesh, coordinate_system="cartesian")
-    my_model.facet_meshtags = facet_tags
-    my_model.volume_meshtags = cell_tags
-
-    my_model.subdomains = [
-        solid_volume,
-        liquid_volume,
-        top,
-        bottom,
-        liquid_gas_surface,
-        solid_gas_surface,
-        liquid_solid_interface,
-    ]
-
-    my_model.method_interface = "penalty"
-    my_model.interfaces = [
-        F.Interface(
-            id=101, subdomains=[solid_volume, liquid_volume], penalty_term=PENALTY
-        )
-    ]
-
-    my_model.surface_to_volume = {
-        top: liquid_volume,
-        bottom: solid_volume,
-        liquid_gas_surface: liquid_volume,
-        solid_gas_surface: solid_volume,
-    }
-
-    H = F.Species("H", subdomains=my_model.volume_subdomains)
-    my_model.species = [H]
-    my_model.temperature = temperature
-
-    bc_top = [
-        F.HenrysBC(
-            subdomain=top,
-            species=H,
-            pressure=P_top,
-            H_0=K_S_0_liquid,
-            E_H=E_K_S_liquid,
-        )
-    ]
-
-    bc_bottom = [
-        F.SievertsBC(
-            subdomain=bottom,
-            species=H,
-            pressure=P_bottom,
-            S_0=K_S_0_solid,
-            E_S=E_K_S_solid,
-        )
-    ]
-
-    bc_liquid_gas = [
-        F.HenrysBC(
-            subdomain=liquid_gas_surface,
-            species=H,
-            pressure=float(p_b),
-            H_0=K_S_0_liquid,
-            E_H=E_K_S_liquid,
-        )
-    ]
-
-    bc_solid_gas = [
-        F.SievertsBC(
-            subdomain=solid_gas_surface,
-            species=H,
-            pressure=float(p_b),
-            S_0=K_S_0_solid,
-            E_S=E_K_S_solid,
-        )
-    ]
-
-    my_model.boundary_conditions = bc_top + bc_bottom + bc_liquid_gas + bc_solid_gas
-    my_model.settings = F.Settings(atol=ATOL, rtol=RTOL, transient=False)
-
-    flux_lg = F.SurfaceFlux(field=H, surface=liquid_gas_surface, filename=None)
-    flux_sg = F.SurfaceFlux(field=H, surface=solid_gas_surface, filename=None)
-    my_model.exports = [flux_lg, flux_sg]
-
-    my_model.initialise()
-    my_model.run()
-
-    j_liquid_gas = float(flux_lg.value)
-    j_solid_gas = float(flux_sg.value)
-
-    del my_model, flux_lg, flux_sg
-
-    return j_liquid_gas, j_solid_gas, H
-
-
-POINTS = {
-    "liq_near_ls": (0.01, 0.00204),  # liquid near liquid-solid interface
-    "liq_near_lg": (0.039, 0.00304),  # liquid near liquid-gas interface (hole)
-    "sol_near_ls": (0.01, 0.00203),  # solid near liquid-solid interface
-    "sol_near_sg": (0.039, 0.00203),  # solid near solid-gas interface (hole)
-}
-
-
-R_gas = 8.314  # J/(mol*K)
+R_gas = 8.314
 t_b = 0.001
 V_b = t_b * L36
 
-t_total = 600
-dt = 5
+t_total = 2e4
+dt = 1
 
 if RANK == 0:
     os.makedirs(OUTDIR, exist_ok=True)
@@ -277,112 +164,161 @@ if RANK == 0:
 csv_path = csv_path_for_T(OUTDIR, temperature)
 
 t_start = 0.0
-p_b = 3.157e02
+p_b0 = 1e-12
 
 if RANK == 0:
     ensure_csv_header(csv_path)
     last = read_last_row(csv_path)
     if last is not None:
         t_start = float(last[0] + dt)
-        p_b = float(last[1])
+        p_b0 = float(last[1])
         print(f"\nResuming from CSV: {csv_path}")
         print(f"Last saved t={last[0]:.3f} s, p_b={last[1]:.3e} Pa")
-        print(f"Restarting at t={t_start:.3f} s, p_b={p_b:.3e} Pa\n")
+        print(f"Restarting at t={t_start:.3f} s, p_b={p_b0:.3e} Pa\n")
     else:
         print(f"\nStarting new run, appending to CSV: {csv_path}\n")
 
 t_start = COMM.bcast(t_start if RANK == 0 else None, root=0)
-p_b = COMM.bcast(p_b if RANK == 0 else None, root=0)
+p_b0 = COMM.bcast(p_b0 if RANK == 0 else None, root=0)
 
-N_b = p_b * V_b / (R_gas * temperature)
+pb_box = [float(p_b0)]
 
-t_hist, pb_hist = [], []
-H1_hist, H2_hist, H3_hist, H4_hist = [], [], [], []
+kB_eV = 8.617333262145e-5
 
-H_last = None
 
-CLEAN_EVERY = 5  # PETSc cleanup period
+def K_henry_T():
+    return K_S_0_liquid * np.exp(-E_K_S_liquid / (kB_eV * temperature))
 
-if RANK == 0:
-    print("\nRunning dynamic p_b update\n")
 
-for n in range(t_total):
-    t_now = t_start + n * dt
+def K_sievert_T():
+    return K_S_0_solid * np.exp(-E_K_S_solid / (kB_eV * temperature))
 
-    j_liquid_gas, j_solid_gas, H = solve_for_pb(p_b)
-    H_last = H
 
-    Fnet = j_liquid_gas * L35 + j_solid_gas * L36
+K_H_T = float(K_henry_T())
+K_S_T = float(K_sievert_T())
 
-    N_b = max(N_b + dt * Fnet, 0.0)
-    p_b = N_b * R_gas * temperature / V_b
+USE_LENGTHS = True
 
-    if RANK == 0:
-        c1, c2, c3, c4 = sample_4_points(H, liquid_volume, solid_volume, POINTS)
 
-        t_hist.append(t_now)
-        pb_hist.append(p_b)
-        H1_hist.append(c1)
-        H2_hist.append(c2)
-        H3_hist.append(c3)
-        H4_hist.append(c4)
+class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
+    def iterate(self):
+        super().iterate()
 
-        append_row(csv_path, [t_now, p_b, c1, c2, c3, c4])
+        j_liquid_gas = float(self.flux_lg.value)
+        j_solid_gas = float(self.flux_sg.value)
 
-        print(
-            f"t={t_now:.3f} s  p_b={p_b:.3e} Pa  "
-            f"j_lg={j_liquid_gas:.3e}  j_sg={j_solid_gas:.3e}  "
-            f"F={Fnet:.3e} mol/s  "
-            f"H_pts=[{c1:.3e}, {c2:.3e}, {c3:.3e}, {c4:.3e}]"
-        )
+        if USE_LENGTHS:
+            Fnet = j_liquid_gas * L35 + j_solid_gas * L36
+        else:
+            Fnet = j_liquid_gas + j_solid_gas
 
-    del H
-    H_last = None
+        self.N_b = max(self.N_b + float(self.dt.value) * Fnet, 0.0)
+        pb_box[0] = max(self.N_b * R_gas * temperature / V_b, 0.0)
 
-    # Periodic cleanup to reduce PETSc/MPI resource accumulation
-    if (n % CLEAN_EVERY) == 0:
-        gc.collect()
-        PETSc.garbage_cleanup(COMM)
+        bc_liquid_gas[0].value = pb_box[0] * K_H_T
+        bc_solid_gas[0].value = (pb_box[0] ** 0.5) * K_S_T if pb_box[0] > 0.0 else 0.0
 
-    if abs(Fnet) < 1e-11:
+        self.bc_forms[self.idx_bclg] = self.create_dirichletbc_form(bc_liquid_gas[0])
+        self.bc_forms[self.idx_bcsg] = self.create_dirichletbc_form(bc_solid_gas[0])
+
         if RANK == 0:
-            print(f"\nBreak at t={t_now:.3f} s (|Fnet| small)\n")
-        break
+            c1, c2, c3, c4 = sample_4_points(
+                self.H, self.liquid_volume, self.solid_volume, self.points
+            )
+            append_row(
+                self.csv_path,
+                [float(self.t.value), float(pb_box[0]), c1, c2, c3, c4],
+            )
+
+            # print(
+            #     f"t={float(self.t.value):.3f} s  p_b={float(pb_box[0]):.3e} Pa  "
+            #     f"j_lg={j_liquid_gas:.3e}  j_sg={j_solid_gas:.3e}  "
+            #     f"F={Fnet:.3e}  "
+            #     f"H_pts=[{c1:.3e}, {c2:.3e}, {c3:.3e}, {c4:.3e}]"
+            # )
+
+        # if abs(Fnet) < 1e-11:
+        #     self.settings.final_time = float(self.t.value)
 
 
-if RANK == 0 and len(t_hist) > 0:
-    os.makedirs(OUTDIR, exist_ok=True)
+my_model = Custom2DProblem()
+my_model.mesh = F.Mesh(mesh, coordinate_system="cartesian")
+my_model.facet_meshtags = facet_tags
+my_model.volume_meshtags = cell_tags
 
-    T_label = T_label_from_temperature(temperature)
+my_model.subdomains = [
+    solid_volume,
+    liquid_volume,
+    top,
+    bottom,
+    liquid_gas_surface,
+    solid_gas_surface,
+    liquid_solid_interface,
+]
 
-    t_arr = np.array(t_hist, dtype=float)
-    pb_arr = np.array(pb_hist, dtype=float)
-    h1 = np.array(H1_hist, dtype=float)
-    h2 = np.array(H2_hist, dtype=float)
-    h3 = np.array(H3_hist, dtype=float)
-    h4 = np.array(H4_hist, dtype=float)
+my_model.method_interface = "penalty"
+my_model.interfaces = [
+    F.Interface(id=101, subdomains=[solid_volume, liquid_volume], penalty_term=PENALTY)
+]
 
-    def save_plot(x, y, fname, ylabel):
-        os.makedirs(OUTDIR, exist_ok=True)
-        plt.figure()
-        plt.plot(x, y)
-        plt.xlabel("t (s)")
-        plt.ylabel(ylabel)
-        plt.tight_layout()
-        plt.savefig(os.path.join(OUTDIR, fname), dpi=200)
-        plt.close()
+my_model.surface_to_volume = {
+    top: liquid_volume,
+    bottom: solid_volume,
+    liquid_gas_surface: liquid_volume,
+    solid_gas_surface: solid_volume,
+}
 
-    save_plot(t_arr, h1, f"H_liq_near_ls_vs_time_{T_label}.png", "H")
-    save_plot(t_arr, h2, f"H_liq_near_lg_vs_time_{T_label}.png", "H")
-    save_plot(t_arr, h3, f"H_sol_near_ls_vs_time_{T_label}.png", "H")
-    save_plot(t_arr, h4, f"H_sol_near_sg_vs_time_{T_label}.png", "H")
-    save_plot(t_arr, pb_arr, f"pb_vs_time_{T_label}.png", "p_b (Pa)")
+H = F.Species("H", subdomains=my_model.volume_subdomains)
+my_model.species = [H]
+my_model.temperature = temperature
 
-    print("\nSaved results to:", OUTDIR)
-    print(f"time_series_{T_label}.csv")
-    print(f"H_liq_near_ls_vs_time_{T_label}.png")
-    print(f"H_liq_near_lg_vs_time_{T_label}.png")
-    print(f"H_sol_near_ls_vs_time_{T_label}.png")
-    print(f"H_sol_near_sg_vs_time_{T_label}.png")
-    print(f"pb_vs_time_{T_label}.png")
-    print("\nDone.\n")
+bc_top = [
+    F.HenrysBC(
+        subdomain=top, species=H, pressure=P_top, H_0=K_S_0_liquid, E_H=E_K_S_liquid
+    )
+]
+bc_bottom = [
+    F.SievertsBC(
+        subdomain=bottom, species=H, pressure=P_bottom, S_0=K_S_0_solid, E_S=E_K_S_solid
+    )
+]
+
+bc_liquid_gas = [
+    F.DirichletBC(subdomain=liquid_gas_surface, species=H, value=pb_box[0] * K_H_T)
+]
+bc_solid_gas = [
+    F.DirichletBC(
+        subdomain=solid_gas_surface,
+        species=H,
+        value=(pb_box[0] ** 0.5) * K_S_T if pb_box[0] > 0.0 else 0.0,
+    )
+]
+
+my_model.boundary_conditions = bc_top + bc_bottom + bc_liquid_gas + bc_solid_gas
+
+my_model.settings = F.Settings(atol=ATOL, rtol=RTOL, transient=True, final_time=t_total)
+my_model.settings.stepsize = F.Stepsize(
+    initial_value=dt, growth_factor=1.1, cutback_factor=0.9, target_nb_iterations=10
+)
+
+flux_lg = F.SurfaceFlux(field=H, surface=liquid_gas_surface, filename=None)
+flux_sg = F.SurfaceFlux(field=H, surface=solid_gas_surface, filename=None)
+my_model.exports = [flux_lg, flux_sg]
+
+my_model.initialise()
+
+my_model.t.value = t_start
+my_model.N_b = p_b0 * V_b / (R_gas * temperature)
+
+my_model.csv_path = csv_path
+my_model.points = POINTS
+my_model.liquid_volume = liquid_volume
+my_model.solid_volume = solid_volume
+my_model.H = H
+my_model.flux_lg = flux_lg
+my_model.flux_sg = flux_sg
+
+my_model.idx_bclg = 2
+my_model.idx_bcsg = 3
+
+my_model.run()
