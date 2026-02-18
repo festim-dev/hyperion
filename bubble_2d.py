@@ -8,9 +8,14 @@ from dolfinx import fem
 from dolfinx import geometry
 from dolfinx.fem import assemble_scalar
 
-import dolfinx
-import pyvista
-from dolfinx.plot import vtk_mesh
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+import os
+import gc
+from petsc4py import PETSc
 
 
 OUTDIR = "plots"
@@ -24,11 +29,6 @@ mesh = _read.mesh
 cell_tags = _read.cell_tags
 facet_tags = _read.facet_tags
 
-# if RANK == 0:
-#     print("Done reading mesh.")
-#     print("cell_tags:", np.unique(cell_tags.values))
-#     print("facet_tags:", np.unique(facet_tags.values))
-
 
 def facet_measure(tag_id: int) -> float:
     ds = ufl.Measure("ds", domain=mesh, subdomain_data=facet_tags)
@@ -40,131 +40,101 @@ def facet_measure(tag_id: int) -> float:
 L35 = facet_measure(35)  # liquid-gas surface (hole) length in 2D
 L36 = facet_measure(36)  # solid-gas surface (hole) length in 2D
 
-if RANK == 0:
-    print(f"L35={L35:.6e} m, L36={L36:.6e} m  (2D -> these are lengths)")
-
-try:
-    pyvista.start_xvfb()
-except Exception:
-    pass
+# if RANK == 0:
+#     print(f"L35={L35:.6e} m, L36={L36:.6e} m ")
 
 
-def get_ugrid(computed_solution, label: str):
-    topo, cell_types, geom = vtk_mesh(computed_solution.function_space)
-    grid = pyvista.UnstructuredGrid(topo, cell_types, geom)
-    grid.point_data[label] = computed_solution.x.array.real
-    grid.set_active_scalars(label)
-    return grid
+def T_label_from_temperature(T):
+    return f"T{int(round(T))}K"
 
 
-def save_H_plot_clean_single(H, liquid_volume, solid_volume, p_b: float, outdir="."):
+def csv_path_for_T(outdir, T):
+    return os.path.join(outdir, f"time_series_{T_label_from_temperature(T)}.csv")
+
+
+def ensure_csv_header(csv_path):
+    if (not os.path.exists(csv_path)) or os.path.getsize(csv_path) == 0:
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("t,p_b,H_liq_near_ls,H_liq_near_lg,H_sol_near_ls,H_sol_near_sg\n")
+
+
+def append_row(csv_path, row):
+    with open(csv_path, "a", encoding="utf-8") as f:
+        f.write(",".join(f"{v:.16e}" for v in row) + "\n")
+
+
+def read_last_row(csv_path):
+    if (not os.path.exists(csv_path)) or os.path.getsize(csv_path) == 0:
+        return None
+    with open(csv_path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        if end == 0:
+            return None
+        size = min(8192, end)
+        f.seek(end - size)
+        tail = f.read().decode("utf-8", errors="ignore").strip().splitlines()
+    for line in reversed(tail):
+        if line and (not line.startswith("t,")):
+            parts = line.split(",")
+            if len(parts) >= 6:
+                return np.array([float(x) for x in parts[:6]], dtype=float)
+    return None
+
+
+def eval_point_on_function(u, x: float, y: float) -> float:
+    pts = np.array([[x, y, 0.0]], dtype=np.float64)  # (1,3)
+
+    tree = geometry.bb_tree(u.function_space.mesh, u.function_space.mesh.topology.dim)
+    cand = geometry.compute_collisions_points(tree, pts)
+    coll = geometry.compute_colliding_cells(u.function_space.mesh, cand, pts)
+
+    links = coll.links(0)
+    if len(links) == 0:
+        return float("nan")
+
+    cell = np.array([links[0]], dtype=np.int32)
+    v = u.eval(pts, cell)
+    return float(v.reshape(-1)[0])
+
+
+def sample_4_points(H, liquid_volume, solid_volume, pts_dict):
     u_liq = H.subdomain_to_post_processing_solution[liquid_volume]
     u_sol = H.subdomain_to_post_processing_solution[solid_volume]
 
-    if RANK == 0:
-        print("liq min/max:", u_liq.x.array.min(), u_liq.x.array.max())
-        print("sol min/max:", u_sol.x.array.min(), u_sol.x.array.max())
+    p1 = pts_dict["liq_near_ls"]
+    p2 = pts_dict["liq_near_lg"]
+    p3 = pts_dict["sol_near_ls"]
+    p4 = pts_dict["sol_near_sg"]
 
-    grid_liq = get_ugrid(u_liq, "H")
-    grid_sol = get_ugrid(u_sol, "H")
+    c1 = eval_point_on_function(u_liq, p1[0], p1[1])
+    c2 = eval_point_on_function(u_liq, p2[0], p2[1])
+    c3 = eval_point_on_function(u_sol, p3[0], p3[1])
+    c4 = eval_point_on_function(u_sol, p4[0], p4[1])
 
-    # shared color limits
-    vmin = float(min(grid_liq["H"].min(), grid_sol["H"].min()))
-    vmax = float(max(grid_liq["H"].max(), grid_sol["H"].max()))
-
-    p = pyvista.Plotter(off_screen=True, window_size=(900, 900))
-    p.set_background("white")
-
-    scalar_bar_args = dict(
-        title="H",
-        vertical=False,
-        position_x=0.22,
-        position_y=0.05,
-        width=0.56,
-        height=0.06,
-        label_font_size=16,
-        title_font_size=18,
-        n_labels=4,
-        fmt="%.2e",
-    )
-
-    p.add_mesh(
-        grid_liq,
-        scalars="H",
-        clim=(vmin, vmax),
-        show_edges=False,
-        scalar_bar_args=scalar_bar_args,
-    )
-    p.add_mesh(grid_sol, scalars="H", clim=(vmin, vmax), show_edges=False)
-
-    p.view_xy()
-    p.camera.parallel_projection = True
-    p.reset_camera()
-
-    p.hide_axes()
-
-    fname = f"{outdir}/H_pb_{p_b:.3e}.png"
-    p.screenshot(fname)
-    p.close()
-    return fname
+    return c1, c2, c3, c4
 
 
-def sample_profile_across_interface(
-    H, liquid_volume, solid_volume, x0, y_min, y_max, n=400
-):
-    u_liq = H.subdomain_to_post_processing_solution[liquid_volume]
-    u_sol = H.subdomain_to_post_processing_solution[solid_volume]
+temperature = 773.15  # K
 
-    ys = np.linspace(y_min, y_max, n)
-    pts = np.zeros((3, n), dtype=np.float64)
-    pts[0, :] = x0
-    pts[1, :] = ys
+D_0_solid, E_D_solid = 3e-3, 0.2
+K_S_0_solid, E_K_S_solid = 4e-5, 0.2
 
-    def eval_on_function(u, pts):
-        ptsT = np.ascontiguousarray(pts.T, dtype=np.float64)  # (N, 3)
-
-        tree = geometry.bb_tree(
-            u.function_space.mesh, u.function_space.mesh.topology.dim
-        )
-        cand = geometry.compute_collisions_points(tree, ptsT)
-        coll = geometry.compute_colliding_cells(u.function_space.mesh, cand, ptsT)
-
-        cells = np.array(
-            [
-                coll.links(i)[0] if len(coll.links(i)) > 0 else -1
-                for i in range(ptsT.shape[0])
-            ],
-            dtype=np.int32,
-        )
-
-        vals = np.full(ptsT.shape[0], np.nan, dtype=np.float64)
-        ok = cells >= 0
-        if np.any(ok):
-            v = u.eval(ptsT[ok], cells[ok])
-            vals[ok] = v.reshape(-1)
-        return vals
-
-    c_liq = eval_on_function(u_liq, pts)
-    c_sol = eval_on_function(u_sol, pts)
-    return ys, c_liq, c_sol
+D_0_liquid, E_D_liquid = 1e-5, 0.2
+K_S_0_liquid, E_K_S_liquid = 1e-5, 0.2
 
 
-temperature = 973.15  # K
+# D_0_solid, E_D_solid = 3e-3, 1e-3
+# K_S_0_solid, E_K_S_solid = 4e-5, 1e-3
 
+# D_0_liquid, E_D_liquid = 1e-5, 1e-3
+# K_S_0_liquid, E_K_S_liquid = 1e-5, 1e-3
 
-D_0_solid, E_D_solid = 3e-3, 1e-30
-D_0_liquid, E_D_liquid = 1e-5, 1e-30
-
-
-K_S_0_liquid, E_K_S_liquid = 1e-5, 1e-30
-K_S_0_solid, E_K_S_solid = 4e-5, 1e-30
 
 P_top = 1e5
 P_bottom = 1e-3
 
-
-PENALTY = 1e7
-
+PENALTY = 1e5
 
 ATOL = 1e-10
 RTOL = 1e-8
@@ -194,7 +164,7 @@ solid_gas_surface = F.SurfaceSubdomain(id=36)
 liquid_solid_interface = F.SurfaceSubdomain(id=101)
 
 
-def solve_and_plot_for_pb(p_b: float, outdir="plots"):
+def solve_for_pb(p_b: float):
     my_model = F.HydrogenTransportProblemDiscontinuous()
     my_model.mesh = F.Mesh(mesh, coordinate_system="cartesian")
     my_model.facet_meshtags = facet_tags
@@ -271,98 +241,76 @@ def solve_and_plot_for_pb(p_b: float, outdir="plots"):
     my_model.boundary_conditions = bc_top + bc_bottom + bc_liquid_gas + bc_solid_gas
     my_model.settings = F.Settings(atol=ATOL, rtol=RTOL, transient=False)
 
-    # Flux density exporters
     flux_lg = F.SurfaceFlux(field=H, surface=liquid_gas_surface, filename=None)
     flux_sg = F.SurfaceFlux(field=H, surface=solid_gas_surface, filename=None)
     my_model.exports = [flux_lg, flux_sg]
 
-    # dolfinx.log.set_log_level(dolfinx.log.LogLevel.INFO)
     my_model.initialise()
     my_model.run()
 
-    if RANK == 0:
-        import os
-
-        os.makedirs(outdir, exist_ok=True)
-    COMM.barrier()
-    png = save_H_plot_clean_single(H, liquid_volume, solid_volume, p_b, outdir=outdir)
-
-    # Return flux densities
     j_liquid_gas = float(flux_lg.value)
     j_solid_gas = float(flux_sg.value)
-    return j_liquid_gas, j_solid_gas, png, H
+
+    del my_model, flux_lg, flux_sg
+
+    return j_liquid_gas, j_solid_gas, H
+
+
+POINTS = {
+    "liq_near_ls": (0.01, 0.00204),  # liquid near liquid-solid interface
+    "liq_near_lg": (0.039, 0.00304),  # liquid near liquid-gas interface (hole)
+    "sol_near_ls": (0.01, 0.00203),  # solid near liquid-solid interface
+    "sol_near_sg": (0.039, 0.00203),  # solid near solid-gas interface (hole)
+}
 
 
 R_gas = 8.314  # J/(mol*K)
 t_b = 0.001
-V_b = t_b * L36  # m^3, arbitrary bubble volume for ideal
-dt = 0.1  # time step for dynamic update (s)
+V_b = t_b * L36
 
-# pb_list = [1e-12, 1e-9, 1e-6, 1e-3, 1.0]
-# if RANK == 0:
-#     print("\nRunning p_b sweep and saving plots to ./plots ...\n")
+t_total = 600
+dt = 5
 
-# for pb in pb_list:
-#     j_liquid_gas, j_solid_gas, png, H = solve_and_plot_for_pb(pb, outdir="plots")
-#     N_b = pb * V_b / (R_gas * temperature)
-#     # Convert flux density -> molar flow (mol/s) using lengths (2D) * thickness
-#     F_mol_s = j_liquid_gas * L35 + j_solid_gas * L36
+if RANK == 0:
+    os.makedirs(OUTDIR, exist_ok=True)
 
-#     N_b = max(N_b + dt * F_mol_s, 0.0)
-#     p_b = N_b * R_gas * temperature / V_b
-#     ys, cL, cS = sample_profile_across_interface(
-#         H,
-#         liquid_volume,
-#         solid_volume,
-#         x0=0.039,  # choose x location
-#         y_min=-0.01,  # bottom of solid
-#         y_max=0.01,  # top of liquid
-#         n=600,
-#     )
+csv_path = csv_path_for_T(OUTDIR, temperature)
 
-#     if RANK == 0:
-#         import matplotlib.pyplot as plt
+t_start = 0.0
+p_b = 3.157e02
 
-#         plt.figure()
-#         plt.plot(ys, cL, label="liquid")
-#         plt.plot(ys, cS, label="solid")
-#         plt.axvline(0.0, linestyle="--")  # if your interface is at y=0
-#         plt.xlabel("y (m)")
-#         plt.ylabel("H concentration")
-#         plt.legend()
-#         plt.tight_layout()
-#         plt.savefig(f"{OUTDIR}/profile_across_interface_pb_{pb:.3e}.png", dpi=200)
-#         plt.close()
+if RANK == 0:
+    ensure_csv_header(csv_path)
+    last = read_last_row(csv_path)
+    if last is not None:
+        t_start = float(last[0] + dt)
+        p_b = float(last[1])
+        print(f"\nResuming from CSV: {csv_path}")
+        print(f"Last saved t={last[0]:.3f} s, p_b={last[1]:.3e} Pa")
+        print(f"Restarting at t={t_start:.3f} s, p_b={p_b:.3e} Pa\n")
+    else:
+        print(f"\nStarting new run, appending to CSV: {csv_path}\n")
 
-#     if RANK == 0:
-#         print(
-#             f"pb={pb:.3e} Pa  j_liquid_gas={j_liquid_gas:.3e}  j_solid_gas={j_solid_gas:.3e}  p_b~{p_b:.3e} Pa, N={N_b:.3e} mol  saved={png}"
-#         )
+t_start = COMM.bcast(t_start if RANK == 0 else None, root=0)
+p_b = COMM.bcast(p_b if RANK == 0 else None, root=0)
 
-# if RANK == 0:
-#     print("\nDone. Check the PNGs in ./plots/")
-t_total = 200
-dt = 0.1
-
-p_b = 1e-12
 N_b = p_b * V_b / (R_gas * temperature)
 
-t_hist = []
-pb_hist = []
+t_hist, pb_hist = [], []
+H1_hist, H2_hist, H3_hist, H4_hist = [], [], [], []
 
 H_last = None
-p_b_last = None
+
+CLEAN_EVERY = 5  # PETSc cleanup period
 
 if RANK == 0:
     print("\nRunning dynamic p_b update\n")
 
 for n in range(t_total):
-    t_now = n * dt
+    t_now = t_start + n * dt
 
-    j_liquid_gas, j_solid_gas, png, H = solve_and_plot_for_pb(p_b, outdir="plots")
-
+    j_liquid_gas, j_solid_gas, H = solve_for_pb(p_b)
     H_last = H
-    p_b_last = p_b
 
     Fnet = j_liquid_gas * L35 + j_solid_gas * L36
 
@@ -370,85 +318,71 @@ for n in range(t_total):
     p_b = N_b * R_gas * temperature / V_b
 
     if RANK == 0:
+        c1, c2, c3, c4 = sample_4_points(H, liquid_volume, solid_volume, POINTS)
+
         t_hist.append(t_now)
         pb_hist.append(p_b)
+        H1_hist.append(c1)
+        H2_hist.append(c2)
+        H3_hist.append(c3)
+        H4_hist.append(c4)
+
+        append_row(csv_path, [t_now, p_b, c1, c2, c3, c4])
 
         print(
             f"t={t_now:.3f} s  p_b={p_b:.3e} Pa  "
-            f"j_liquid_gas={j_liquid_gas:.3e}  "
-            f"j_solid_gas={j_solid_gas:.3e}  "
-            f"F~{Fnet:.3e} mol/s"
+            f"j_lg={j_liquid_gas:.3e}  j_sg={j_solid_gas:.3e}  "
+            f"F={Fnet:.3e} mol/s  "
+            f"H_pts=[{c1:.3e}, {c2:.3e}, {c3:.3e}, {c4:.3e}]"
         )
 
-    if abs(Fnet) < 1e-12:
+    del H
+    H_last = None
+
+    # Periodic cleanup to reduce PETSc/MPI resource accumulation
+    if (n % CLEAN_EVERY) == 0:
+        gc.collect()
+        PETSc.garbage_cleanup(COMM)
+
+    if abs(Fnet) < 1e-11:
         if RANK == 0:
             print(f"\nBreak at t={t_now:.3f} s (|Fnet| small)\n")
         break
 
 
-# ---------------- FINAL PLOTS ONLY ----------------
+if RANK == 0 and len(t_hist) > 0:
+    os.makedirs(OUTDIR, exist_ok=True)
 
-if RANK == 0 and H_last is not None:
-    import matplotlib.pyplot as plt
+    T_label = T_label_from_temperature(temperature)
 
-    print("\nGenerating final plots...\n")
+    t_arr = np.array(t_hist, dtype=float)
+    pb_arr = np.array(pb_hist, dtype=float)
+    h1 = np.array(H1_hist, dtype=float)
+    h2 = np.array(H2_hist, dtype=float)
+    h3 = np.array(H3_hist, dtype=float)
+    h4 = np.array(H4_hist, dtype=float)
 
-    # ---- Profile at x0 = 0.039 ----
-    ys_1, cL_1, cS_1 = sample_profile_across_interface(
-        H_last,
-        liquid_volume,
-        solid_volume,
-        x0=0.039,
-        y_min=-0.01,
-        y_max=0.01,
-        n=600,
-    )
+    def save_plot(x, y, fname, ylabel):
+        os.makedirs(OUTDIR, exist_ok=True)
+        plt.figure()
+        plt.plot(x, y)
+        plt.xlabel("t (s)")
+        plt.ylabel(ylabel)
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTDIR, fname), dpi=200)
+        plt.close()
 
-    plt.figure()
-    plt.plot(ys_1, cL_1, label="liquid")
-    plt.plot(ys_1, cS_1, label="solid")
-    plt.axvline(0.0, linestyle="--")
-    plt.xlabel("y (m)")
-    plt.ylabel("H concentration")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(f"{OUTDIR}/FINAL_profile_x0_0.039.png", dpi=200)
-    plt.close()
+    save_plot(t_arr, h1, f"H_liq_near_ls_vs_time_{T_label}.png", "H")
+    save_plot(t_arr, h2, f"H_liq_near_lg_vs_time_{T_label}.png", "H")
+    save_plot(t_arr, h3, f"H_sol_near_ls_vs_time_{T_label}.png", "H")
+    save_plot(t_arr, h4, f"H_sol_near_sg_vs_time_{T_label}.png", "H")
+    save_plot(t_arr, pb_arr, f"pb_vs_time_{T_label}.png", "p_b (Pa)")
 
-    # ---- Profile at x0 = 0.01 ----
-    ys_2, cL_2, cS_2 = sample_profile_across_interface(
-        H_last,
-        liquid_volume,
-        solid_volume,
-        x0=0.01,
-        y_min=-0.01,
-        y_max=0.01,
-        n=600,
-    )
-
-    plt.figure()
-    plt.plot(ys_2, cL_2, label="liquid")
-    plt.plot(ys_2, cS_2, label="solid")
-    plt.axvline(0.0, linestyle="--")
-    plt.xlabel("y (m)")
-    plt.ylabel("H concentration")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(f"{OUTDIR}/FINAL_profile_x0_0.01.png", dpi=200)
-    plt.close()
-
-    # ---- t vs p_b ----
-    plt.figure()
-    plt.plot(t_hist, pb_hist)
-    plt.xlabel("t (s)")
-    plt.ylabel("p_b (Pa)")
-    plt.tight_layout()
-    plt.savefig(f"{OUTDIR}/FINAL_pb_vs_time.png", dpi=200)
-    plt.close()
-
-    print("Saved:")
-    print(f"{OUTDIR}/FINAL_profile_x0_0.039.png")
-    print(f"{OUTDIR}/FINAL_profile_x0_0.01.png")
-    print(f"{OUTDIR}/FINAL_pb_vs_time.png")
-
+    print("\nSaved results to:", OUTDIR)
+    print(f"time_series_{T_label}.csv")
+    print(f"H_liq_near_ls_vs_time_{T_label}.png")
+    print(f"H_liq_near_lg_vs_time_{T_label}.png")
+    print(f"H_sol_near_ls_vs_time_{T_label}.png")
+    print(f"H_sol_near_sg_vs_time_{T_label}.png")
+    print(f"pb_vs_time_{T_label}.png")
     print("\nDone.\n")
