@@ -4,13 +4,26 @@ channels:
   - conda-forge
 
 dependencies:
-  - python=3.12
-  - festim
-  - python-gmsh
-  - pyvista
+  - python<3.14  # som pyvista incompatibility issues with python 3.14
+  - pip=23.3
+  - setuptools<82
+  - wheel<0.45
+  - jupytext # necessary to open MyST files using BinderHub https://jupyterbook.org/en/stable/interactive/launchbuttons.html#launchbuttons-binder
+  - ipywidgets
   - matplotlib
-  - pint
-  - pip
+  - ipykernel
+  - nbconvert
   - fenics-dolfinx
+  - festim
+  - pyvista
+  - python-gmsh
+  - shapely
+  - scipy
+  - pyparsing
+  - trame
+  - vtk
+  - trame-vtk<2.10.3
+  - trame-vuetify
+  - nest-asyncio2
   - pip:
       - h_transport_materials
