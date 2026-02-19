@@ -215,6 +215,8 @@ class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
         self.N_b = max(self.N_b + float(self.dt.value) * Fnet, 0.0)
         pb_box[0] = max(self.N_b * R_gas * temperature / V_b, 0.0)
 
+        print(f"t={float(self.t.value):.3f} s  p_b={float(pb_box[0]):.3e} Pa  ")
+
         bc_liquid_gas[0].value = pb_box[0] * K_H_T
         bc_solid_gas[0].value = (pb_box[0] ** 0.5) * K_S_T if pb_box[0] > 0.0 else 0.0
 
@@ -284,10 +286,12 @@ bc_bottom = [
 ]
 
 bc_liquid_gas = [
-    F.DirichletBC(subdomain=liquid_gas_surface, species=H, value=pb_box[0] * K_H_T)
+    F.FixedConcentrationBC(
+        subdomain=liquid_gas_surface, species=H, value=pb_box[0] * K_H_T
+    )
 ]
 bc_solid_gas = [
-    F.DirichletBC(
+    F.FixedConcentrationBC(
         subdomain=solid_gas_surface,
         species=H,
         value=(pb_box[0] ** 0.5) * K_S_T if pb_box[0] > 0.0 else 0.0,
