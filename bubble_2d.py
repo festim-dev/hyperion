@@ -179,7 +179,7 @@ if RANK == 0:
         print(f"\nStarting new run, appending to CSV: {csv_path}\n")
 
 
-kB_eV = 8.617333262145e-5
+kB_eV = F.k_B
 
 
 def K_henry_T():
@@ -200,8 +200,8 @@ class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
     def iterate(self):
         super().iterate()
 
-        j_liquid_gas = float(self.flux_lg.value)
-        j_solid_gas = float(self.flux_sg.value)
+        j_liquid_gas = float(flux_lg.value)
+        j_solid_gas = float(flux_sg.value)
 
         if USE_LENGTHS:
             Fnet = j_liquid_gas * L35 + j_solid_gas * L36
@@ -214,15 +214,13 @@ class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
         bc_liquid_gas[0].value = new_pb * K_H_T
         bc_solid_gas[0].value = (new_pb**0.5) * K_S_T if new_pb > 0.0 else 0.0
 
-        self.bc_forms[self.idx_bclg] = self.create_dirichletbc_form(bc_liquid_gas[0])
-        self.bc_forms[self.idx_bcsg] = self.create_dirichletbc_form(bc_solid_gas[0])
+        self.bc_forms[idx_bclg] = self.create_dirichletbc_form(bc_liquid_gas[0])
+        self.bc_forms[idx_bcsg] = self.create_dirichletbc_form(bc_solid_gas[0])
 
         if RANK == 0:
-            c1, c2, c3, c4 = sample_4_points(
-                self.H, self.liquid_volume, self.solid_volume, self.points
-            )
+            c1, c2, c3, c4 = sample_4_points(H, liquid_volume, solid_volume, POINTS)
             append_row(
-                self.csv_path,
+                csv_path,
                 [float(self.t.value), float(new_pb), c1, c2, c3, c4],
             )
 
@@ -306,15 +304,7 @@ my_model.initialise()
 my_model.t.value = t_start
 my_model.N_b = p_b0 * V_b / (R_gas * temperature)
 
-my_model.csv_path = csv_path
-my_model.points = POINTS
-my_model.liquid_volume = liquid_volume
-my_model.solid_volume = solid_volume
-my_model.H = H
-my_model.flux_lg = flux_lg
-my_model.flux_sg = flux_sg
-
-my_model.idx_bclg = 2
-my_model.idx_bcsg = 3
+idx_bclg = 2
+idx_bcsg = 3
 
 my_model.run()
