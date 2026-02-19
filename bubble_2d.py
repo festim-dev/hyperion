@@ -164,7 +164,7 @@ if RANK == 0:
 csv_path = csv_path_for_T(OUTDIR, temperature)
 
 t_start = 0.0
-p_b0 = 1e-12
+p_b0 = 1e-12  # initial pressure
 
 if RANK == 0:
     ensure_csv_header(csv_path)
@@ -178,10 +178,6 @@ if RANK == 0:
     else:
         print(f"\nStarting new run, appending to CSV: {csv_path}\n")
 
-t_start = COMM.bcast(t_start if RANK == 0 else None, root=0)
-p_b0 = COMM.bcast(p_b0 if RANK == 0 else None, root=0)
-
-pb_box = [float(p_b0)]
 
 kB_eV = 8.617333262145e-5
 
@@ -213,12 +209,10 @@ class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
             Fnet = j_liquid_gas + j_solid_gas
 
         self.N_b = max(self.N_b + float(self.dt.value) * Fnet, 0.0)
-        pb_box[0] = max(self.N_b * R_gas * temperature / V_b, 0.0)
+        new_pb = max(self.N_b * R_gas * temperature / V_b, 0.0)
 
-        print(f"t={float(self.t.value):.3f} s  p_b={float(pb_box[0]):.3e} Pa  ")
-
-        bc_liquid_gas[0].value = pb_box[0] * K_H_T
-        bc_solid_gas[0].value = (pb_box[0] ** 0.5) * K_S_T if pb_box[0] > 0.0 else 0.0
+        bc_liquid_gas[0].value = new_pb * K_H_T
+        bc_solid_gas[0].value = (new_pb**0.5) * K_S_T if new_pb > 0.0 else 0.0
 
         self.bc_forms[self.idx_bclg] = self.create_dirichletbc_form(bc_liquid_gas[0])
         self.bc_forms[self.idx_bcsg] = self.create_dirichletbc_form(bc_solid_gas[0])
@@ -229,7 +223,7 @@ class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
             )
             append_row(
                 self.csv_path,
-                [float(self.t.value), float(pb_box[0]), c1, c2, c3, c4],
+                [float(self.t.value), float(new_pb), c1, c2, c3, c4],
             )
 
             # print(
@@ -286,15 +280,13 @@ bc_bottom = [
 ]
 
 bc_liquid_gas = [
-    F.FixedConcentrationBC(
-        subdomain=liquid_gas_surface, species=H, value=pb_box[0] * K_H_T
-    )
+    F.FixedConcentrationBC(subdomain=liquid_gas_surface, species=H, value=p_b0 * K_H_T)
 ]
 bc_solid_gas = [
     F.FixedConcentrationBC(
         subdomain=solid_gas_surface,
         species=H,
-        value=(pb_box[0] ** 0.5) * K_S_T if pb_box[0] > 0.0 else 0.0,
+        value=(p_b0**0.5) * K_S_T if p_b0 > 0.0 else 0.0,
     )
 ]
 
