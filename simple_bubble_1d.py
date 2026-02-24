@@ -6,8 +6,6 @@ import basix
 import dolfinx
 import matplotlib.pyplot as plt
 
-import mesh
-
 
 class DiscontinuousMesh1D(F.Mesh1D):
     def __init__(self, vertices1, vertices2, **kwargs):
@@ -83,121 +81,113 @@ class Custom1DProblem(F.HydrogenTransportProblemDiscontinuous):
 
 c_up = 1.0
 c_down = 0.0
-temperature = 500
 V_b = 10000
 
-# PROBLEM
-all_pbs = []
-old_N_b = 0.000001
-problem = Custom1DProblem()
 
-problem.mesh = DiscontinuousMesh1D(
-    vertices1=np.linspace(0.0, 1.0, 500),
-    vertices2=np.linspace(2.0, 3.0, 500),
-)
-
-salt = F.Material(D_0=1, E_D=0, K_S_0=2, E_K_S=0.2, solubility_law="henry")
-metal = F.Material(D_0=2, E_D=0, K_S_0=3, E_K_S=0.2, solubility_law="sievert")
-
-# print("Salt material:", salt.K_S_0)
-# print("Metal material:", metal.K_S_0)
-
-dolfinx_mesh = problem.mesh.mesh
-
-K_H = salt.get_solubility_coefficient(mesh=dolfinx_mesh, temperature=temperature)
-K_S = metal.get_solubility_coefficient(mesh=dolfinx_mesh, temperature=temperature)
-
-K_H = float(K_H)
-K_S = float(K_S)
-
-print("Salt material:", K_H)
-print("Metal material:", K_S)
-
-left = F.SurfaceSubdomain1D(id=3, x=0.0)
-right = F.SurfaceSubdomain1D(id=4, x=3.0)
-salt_air_interface = F.SurfaceSubdomain1D(id=5, x=1.0)
-air_metal_interface = F.SurfaceSubdomain1D(id=6, x=2.0)
-
-left_volume = F.VolumeSubdomain1D(id=1, borders=[0.0, 1.0], material=salt)
-right_volume = F.VolumeSubdomain1D(id=2, borders=[2.0, 3.0], material=metal)
-problem.subdomains = [
-    left_volume,
-    right_volume,
-    left,
-    right,
-    salt_air_interface,
-    air_metal_interface,
-]
-
-problem.surface_to_volume = {
-    salt_air_interface: left_volume,
-    air_metal_interface: right_volume,
-    left: left_volume,
-    right: right_volume,
-}
-
-problem.interfaces = []
-
-H = F.Species("H", subdomains=problem.volume_subdomains)
-problem.species = [H]
-
-bubble_pressure = 0  # Define the bubble pressure
-
-bc_liquid_gas = F.FixedConcentrationBC(
-    subdomain=salt_air_interface, species=H, value=salt.K_S_0 * bubble_pressure
-)
-bc_solid_gas = F.FixedConcentrationBC(
-    subdomain=air_metal_interface,
-    species=H,
-    value=(bubble_pressure**0.5) * metal.K_S_0 if bubble_pressure > 0.0 else 0.0,
-)
-problem.boundary_conditions = [
-    F.FixedConcentrationBC(subdomain=left, species=H, value=c_up),
-    F.FixedConcentrationBC(subdomain=right, species=H, value=c_down),
-    bc_liquid_gas,
-    bc_solid_gas,
-]
-
-
-problem.temperature = temperature
-
-problem.settings = F.Settings(
-    atol=1e-10,
-    rtol=1e-10,
-    final_time=2e4,
-)
-
-problem.settings.stepsize = F.Stepsize(
-    initial_value=0.0001,
-    growth_factor=1.01,
-    cutback_factor=0.9,
-    target_nb_iterations=4,
-)
-
-flux_lg = F.SurfaceFlux(field=H, surface=salt_air_interface, filename=None)
-flux_sg = F.SurfaceFlux(field=H, surface=air_metal_interface, filename=None)
-
-# h_left = F.VTXSpeciesExport(filename="H_salt.bp", field=H, subdomain=left_volume)
-# h_right = F.VTXSpeciesExport(filename="H_metal.bp", field=H, subdomain=right_volume)
-
-problem.exports = [flux_lg, flux_sg]  # , h_left, h_right]
-
-problem.initialise()
-
-problem.run()
-
-
-times = flux_lg.t
+temperatures = (500, 600, 700)
 
 fig, axs = plt.subplots(2, 1, sharex=True)
 
-plt.sca(axs[0])
-plt.plot(times, flux_lg.data, label="j_liquid_gas")
-plt.plot(times, flux_sg.data, label="j_solid_gas")
-plt.legend()
+for temperature in temperatures:
+    all_pbs = []
+    old_N_b = 0.000001
 
-plt.sca(axs[1])
-plt.plot(times, all_pbs)
-plt.xlabel("Time")
-plt.ylabel("Bubble pressure")
+    # PROBLEM
+    problem = Custom1DProblem()
+
+    problem.mesh = DiscontinuousMesh1D(
+        vertices1=np.linspace(0.0, 1.0, 500),
+        vertices2=np.linspace(2.0, 3.0, 500),
+    )
+
+    salt = F.Material(D_0=1, E_D=0, K_S_0=2, E_K_S=0.2, solubility_law="henry")
+    metal = F.Material(D_0=2, E_D=0, K_S_0=3, E_K_S=0.2, solubility_law="sievert")
+
+    dolfinx_mesh = problem.mesh.mesh
+
+    K_H = salt.get_solubility_coefficient(mesh=dolfinx_mesh, temperature=temperature)
+    K_S = metal.get_solubility_coefficient(mesh=dolfinx_mesh, temperature=temperature)
+
+    K_H = float(K_H)
+    K_S = float(K_S)
+
+    left = F.SurfaceSubdomain1D(id=3, x=0.0)
+    right = F.SurfaceSubdomain1D(id=4, x=3.0)
+    salt_air_interface = F.SurfaceSubdomain1D(id=5, x=1.0)
+    air_metal_interface = F.SurfaceSubdomain1D(id=6, x=2.0)
+
+    left_volume = F.VolumeSubdomain1D(id=1, borders=[0.0, 1.0], material=salt)
+    right_volume = F.VolumeSubdomain1D(id=2, borders=[2.0, 3.0], material=metal)
+    problem.subdomains = [
+        left_volume,
+        right_volume,
+        left,
+        right,
+        salt_air_interface,
+        air_metal_interface,
+    ]
+
+    problem.surface_to_volume = {
+        salt_air_interface: left_volume,
+        air_metal_interface: right_volume,
+        left: left_volume,
+        right: right_volume,
+    }
+
+    problem.interfaces = []
+
+    H = F.Species("H", subdomains=problem.volume_subdomains)
+    problem.species = [H]
+
+    bubble_pressure = 0.0
+
+    bc_liquid_gas = F.FixedConcentrationBC(
+        subdomain=salt_air_interface, species=H, value=salt.K_S_0 * bubble_pressure
+    )
+    bc_solid_gas = F.FixedConcentrationBC(
+        subdomain=air_metal_interface,
+        species=H,
+        value=(bubble_pressure**0.5) * metal.K_S_0 if bubble_pressure > 0.0 else 0.0,
+    )
+    problem.boundary_conditions = [
+        F.FixedConcentrationBC(subdomain=left, species=H, value=c_up),
+        F.FixedConcentrationBC(subdomain=right, species=H, value=c_down),
+        bc_liquid_gas,
+        bc_solid_gas,
+    ]
+
+    problem.temperature = temperature
+
+    problem.settings = F.Settings(
+        atol=1e-10,
+        rtol=1e-10,
+        final_time=5000,
+    )
+
+    problem.settings.stepsize = F.Stepsize(
+        initial_value=0.0001,
+        growth_factor=1.01,
+        cutback_factor=0.9,
+        target_nb_iterations=4,
+    )
+
+    flux_lg = F.SurfaceFlux(field=H, surface=salt_air_interface, filename=None)
+    flux_sg = F.SurfaceFlux(field=H, surface=air_metal_interface, filename=None)
+
+    problem.exports = [flux_lg, flux_sg]
+
+    problem.initialise()
+    problem.run()
+
+    times = flux_lg.t
+
+    axs[0].plot(times, flux_lg.data, label=f"j_liquid_gas, T={temperature}K")
+    axs[0].plot(times, flux_sg.data, label=f"j_solid_gas,  T={temperature}K")
+    axs[1].plot(times, all_pbs, label=f"p_b, T={temperature}K")
+
+
+axs[0].legend()
+axs[1].set_xlabel("Time")
+axs[1].set_ylabel("Bubble pressure")
+axs[1].legend()
 plt.show()
