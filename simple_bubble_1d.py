@@ -4,6 +4,9 @@ import numpy as np
 import ufl
 import basix
 import dolfinx
+import matplotlib.pyplot as plt
+
+import mesh
 
 
 class DiscontinuousMesh1D(F.Mesh1D):
@@ -51,7 +54,7 @@ class DiscontinuousMesh1D(F.Mesh1D):
         pass
 
 
-class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
+class Custom1DProblem(F.HydrogenTransportProblemDiscontinuous):
     def iterate(self):
         global old_N_b
         super().iterate()
@@ -64,8 +67,8 @@ class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
         new_N_b = max(old_N_b + float(self.dt.value) * Fnet, 0.0)
         new_pb = max(new_N_b * F.R * temperature / V_b, 0.0)
 
-        bc_liquid_gas.value = new_pb * salt.K_S_0
-        bc_solid_gas.value = (new_pb**0.5) * metal.K_S_0 if new_pb > 0.0 else 0.0
+        bc_liquid_gas.value = new_pb * K_H
+        bc_solid_gas.value = (new_pb**0.5) * K_S if new_pb > 0.0 else 0.0
 
         idx_bclg = self.boundary_conditions.index(bc_liquid_gas)
         idx_bcsg = self.boundary_conditions.index(bc_solid_gas)
@@ -86,15 +89,29 @@ V_b = 10000
 # PROBLEM
 all_pbs = []
 old_N_b = 0.000001
-problem = Custom2DProblem()
+problem = Custom1DProblem()
 
 problem.mesh = DiscontinuousMesh1D(
     vertices1=np.linspace(0.0, 1.0, 500),
     vertices2=np.linspace(2.0, 3.0, 500),
 )
 
-salt = F.Material(D_0=1, E_D=0, K_S_0=2, E_K_S=0, solubility_law="henry")
-metal = F.Material(D_0=2, E_D=0, K_S_0=3, E_K_S=0, solubility_law="sievert")
+salt = F.Material(D_0=1, E_D=0, K_S_0=2, E_K_S=0.2, solubility_law="henry")
+metal = F.Material(D_0=2, E_D=0, K_S_0=3, E_K_S=0.2, solubility_law="sievert")
+
+# print("Salt material:", salt.K_S_0)
+# print("Metal material:", metal.K_S_0)
+
+dolfinx_mesh = problem.mesh.mesh
+
+K_H = salt.get_solubility_coefficient(mesh=dolfinx_mesh, temperature=temperature)
+K_S = metal.get_solubility_coefficient(mesh=dolfinx_mesh, temperature=temperature)
+
+K_H = float(K_H)
+K_S = float(K_S)
+
+print("Salt material:", K_H)
+print("Metal material:", K_S)
 
 left = F.SurfaceSubdomain1D(id=3, x=0.0)
 right = F.SurfaceSubdomain1D(id=4, x=3.0)
@@ -147,7 +164,7 @@ problem.temperature = temperature
 problem.settings = F.Settings(
     atol=1e-10,
     rtol=1e-10,
-    final_time=2,
+    final_time=2e4,
 )
 
 problem.settings.stepsize = F.Stepsize(
@@ -160,17 +177,15 @@ problem.settings.stepsize = F.Stepsize(
 flux_lg = F.SurfaceFlux(field=H, surface=salt_air_interface, filename=None)
 flux_sg = F.SurfaceFlux(field=H, surface=air_metal_interface, filename=None)
 
-h_left = F.VTXSpeciesExport(filename="H_salt.bp", field=H, subdomain=left_volume)
-h_right = F.VTXSpeciesExport(filename="H_metal.bp", field=H, subdomain=right_volume)
+# h_left = F.VTXSpeciesExport(filename="H_salt.bp", field=H, subdomain=left_volume)
+# h_right = F.VTXSpeciesExport(filename="H_metal.bp", field=H, subdomain=right_volume)
 
-problem.exports = [flux_lg, flux_sg, h_left, h_right]
+problem.exports = [flux_lg, flux_sg]  # , h_left, h_right]
 
 problem.initialise()
 
 problem.run()
 
-
-import matplotlib.pyplot as plt
 
 times = flux_lg.t
 
