@@ -79,12 +79,8 @@ class Custom1DProblem(F.HydrogenTransportProblemDiscontinuous):
 
 # PARAMETERS
 
-# c_up = 1.0
-# c_down = 0.0
-
-c_up = 0.0
-c_down = 1.0
-
+c_up = 1.0
+c_down = 0.0
 V_b = 10000
 
 
@@ -177,8 +173,7 @@ for temperature in temperatures:
 
     flux_lg = F.SurfaceFlux(field=H, surface=salt_air_interface, filename=None)
     flux_sg = F.SurfaceFlux(field=H, surface=air_metal_interface, filename=None)
-    # flux_down = F.SurfaceFlux(field=H, surface=right, filename=None)
-    flux_down = F.SurfaceFlux(field=H, surface=left, filename=None)
+    flux_down = F.SurfaceFlux(field=H, surface=right, filename=None)
 
     problem.exports = [flux_lg, flux_sg, flux_down]
 
