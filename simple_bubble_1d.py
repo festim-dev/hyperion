@@ -79,12 +79,16 @@ class Custom1DProblem(F.HydrogenTransportProblemDiscontinuous):
 
 # PARAMETERS
 
-c_up = 1.0
-c_down = 0.0
+# c_up = 1.0
+# c_down = 0.0
+
+c_up = 0.0
+c_down = 1.0
+
 V_b = 10000
 
 
-temperatures = (500, 600, 700)
+temperatures = (500, 550, 600, 650, 700)
 
 fig, axs = plt.subplots(2, 1, sharex=True)
 
@@ -173,21 +177,27 @@ for temperature in temperatures:
 
     flux_lg = F.SurfaceFlux(field=H, surface=salt_air_interface, filename=None)
     flux_sg = F.SurfaceFlux(field=H, surface=air_metal_interface, filename=None)
+    # flux_down = F.SurfaceFlux(field=H, surface=right, filename=None)
+    flux_down = F.SurfaceFlux(field=H, surface=left, filename=None)
 
-    problem.exports = [flux_lg, flux_sg]
+    problem.exports = [flux_lg, flux_sg, flux_down]
 
     problem.initialise()
     problem.run()
 
     times = flux_lg.t
 
-    axs[0].plot(times, flux_lg.data, label=f"j_liquid_gas, T={temperature}K")
-    axs[0].plot(times, flux_sg.data, label=f"j_solid_gas,  T={temperature}K")
+    # axs[0].plot(times, flux_lg.data, label=f"j_liquid_gas, T={temperature}K")
+    # axs[0].plot(times, flux_sg.data, label=f"j_solid_gas,  T={temperature}K")
+    axs[0].plot(times, flux_down.data, label=f"j_down,  T={temperature}K")
     axs[1].plot(times, all_pbs, label=f"p_b, T={temperature}K")
 
+axs[0].legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+axs[1].legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
 
-axs[0].legend()
+axs[0].set_ylabel("Downstream flux (H/s)")
 axs[1].set_xlabel("Time")
-axs[1].set_ylabel("Bubble pressure")
-axs[1].legend()
+axs[1].set_ylabel("Bubble pressure (Pa)")
+
+plt.tight_layout()
 plt.show()
