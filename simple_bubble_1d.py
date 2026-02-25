@@ -80,10 +80,10 @@ class Custom1DProblem(F.HydrogenTransportProblemDiscontinuous):
 
 # PARAMETERS
 
-# c_up = 1.0
-# c_down = 0.0
-c_up = 0.0
-c_down = 1.0
+c_up = 1.0
+c_down = 0.0
+# c_up = 0.0
+# c_down = 1.0
 
 
 V_b = 10000
@@ -100,7 +100,8 @@ fig, axs = plt.subplots(2, 1, sharex=True)
 
 all_fluxes = []
 
-for temperature in temperatures:
+# for temperature in temperatures:
+for temperature in [773.15]:  # Just one temperature for now
     all_pbs = []
     old_N_b = 0.000001
 
@@ -185,10 +186,14 @@ for temperature in temperatures:
 
     flux_lg = F.SurfaceFlux(field=H, surface=salt_air_interface, filename=None)
     flux_sg = F.SurfaceFlux(field=H, surface=air_metal_interface, filename=None)
-    # flux_down = F.SurfaceFlux(field=H, surface=right, filename=None)
-    flux_down = F.SurfaceFlux(field=H, surface=left, filename=None)
 
-    problem.exports = [flux_lg, flux_sg, flux_down]
+    h_left = F.VTXSpeciesExport(filename="H_salt.bp", field=H, subdomain=left_volume)
+    h_right = F.VTXSpeciesExport(filename="H_metal.bp", field=H, subdomain=right_volume)
+
+    flux_down = F.SurfaceFlux(field=H, surface=right, filename=None)
+    # flux_down = F.SurfaceFlux(field=H, surface=left, filename=None)
+
+    problem.exports = [flux_lg, flux_sg, flux_down, h_left, h_right]
 
     problem.initialise()
     problem.run()
