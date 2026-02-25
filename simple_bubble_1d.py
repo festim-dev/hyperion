@@ -5,6 +5,7 @@ import ufl
 import basix
 import dolfinx
 import matplotlib.pyplot as plt
+import os
 
 
 class DiscontinuousMesh1D(F.Mesh1D):
@@ -79,14 +80,25 @@ class Custom1DProblem(F.HydrogenTransportProblemDiscontinuous):
 
 # PARAMETERS
 
-c_up = 1.0
-c_down = 0.0
+# c_up = 1.0
+# c_down = 0.0
+c_up = 0.0
+c_down = 1.0
+
+
 V_b = 10000
 
 
-temperatures = (500, 550, 600, 650, 700)
+os.makedirs("plots", exist_ok=True)
+
+Te_Cs = (500, 550, 600, 650, 700)
+temperatures = tuple(float(T) + 273.15 for T in Te_Cs)
+# temperatures = (500, 550, 600, 650, 700)
 
 fig, axs = plt.subplots(2, 1, sharex=True)
+
+
+all_fluxes = []
 
 for temperature in temperatures:
     all_pbs = []
@@ -161,7 +173,7 @@ for temperature in temperatures:
     problem.settings = F.Settings(
         atol=1e-10,
         rtol=1e-10,
-        final_time=5000,
+        final_time=1000,
     )
 
     problem.settings.stepsize = F.Stepsize(
@@ -173,15 +185,31 @@ for temperature in temperatures:
 
     flux_lg = F.SurfaceFlux(field=H, surface=salt_air_interface, filename=None)
     flux_sg = F.SurfaceFlux(field=H, surface=air_metal_interface, filename=None)
-    flux_down = F.SurfaceFlux(field=H, surface=right, filename=None)
+    # flux_down = F.SurfaceFlux(field=H, surface=right, filename=None)
+    flux_down = F.SurfaceFlux(field=H, surface=left, filename=None)
 
     problem.exports = [flux_lg, flux_sg, flux_down]
 
     problem.initialise()
     problem.run()
 
-    times = flux_lg.t
+    t = np.asarray(flux_down.t, dtype=float)
+    j = np.asarray(flux_down.data, dtype=float)
 
+    T_C = temperature - 273.15
+    filename = f"plots/flux_c_up_{c_up:.3f}_T_{T_C:.0f}C.csv"
+
+    np.savetxt(
+        filename,
+        np.column_stack([t, j]),
+        delimiter=",",
+        header="time,flux",
+        comments="",
+    )
+
+    print(f"Saved {filename}")
+
+    times = flux_lg.t
     # axs[0].plot(times, flux_lg.data, label=f"j_liquid_gas, T={temperature}K")
     # axs[0].plot(times, flux_sg.data, label=f"j_solid_gas,  T={temperature}K")
     axs[0].plot(times, flux_down.data, label=f"j_down,  T={temperature}K")
