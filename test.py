@@ -48,17 +48,18 @@ class DiscontinuousMesh1D(F.Mesh1D):
 
 
 # PARAMETERS
-# c_up = 1.0
-# c_down = 0.0
-c_up = 0.0
-c_down = 1.0
+c_up = 1.0
+c_down = 0.0
+# c_up = 0.0
+# c_down = 1.0
 
 Te_Cs = (500, 550, 600, 650, 700)
 temperatures = tuple(float(T) + 273.15 for T in Te_Cs)
 os.makedirs("plots", exist_ok=True)
 fig, ax = plt.subplots(1, 1, sharex=True)
 
-for temperature in temperatures:
+# for temperature in temperatures:
+for temperature in [773.15]:
     # PROBLEM (no bubble)
     problem = F.HydrogenTransportProblemDiscontinuous()
 
@@ -112,8 +113,14 @@ for temperature in temperatures:
     )
 
     # Track downstream (pick left or right)
-    flux_out = F.SurfaceFlux(field=H, surface=left, filename=None)
-    problem.exports = [flux_out]
+    flux_out = F.SurfaceFlux(field=H, surface=right, filename=None)
+    h_left = F.VTXSpeciesExport(
+        filename="H_salt_nobubble.bp", field=H, subdomain=left_volume
+    )
+    h_right = F.VTXSpeciesExport(
+        filename="H_metal_nobubble.bp", field=H, subdomain=right_volume
+    )
+    problem.exports = [flux_out, h_left, h_right]
 
     problem.initialise()
     # dolfinx.log.set_log_level(dolfinx.log.LogLevel.INFO)
