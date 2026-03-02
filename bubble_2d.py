@@ -71,8 +71,10 @@ if RANK == 0:
     os.makedirs(OUTDIR, exist_ok=True)
 
 fig_pb, ax_pb = None, None
+fig_flux, ax_flux = None, None
 if RANK == 0:
     fig_pb, ax_pb = plt.subplots(1, 1)
+    fig_flux, ax_flux = plt.subplots(1, 1)
 
 D_0_solid, E_D_solid = 2, 0.0
 K_S_0_solid, E_K_S_solid = 3, 0.2
@@ -195,7 +197,8 @@ for temperature in temperatures:
 
     flux_lg = F.SurfaceFlux(field=H, surface=liquid_gas_surface, filename=None)
     flux_sg = F.SurfaceFlux(field=H, surface=solid_gas_surface, filename=None)
-    my_model.exports = [flux_lg, flux_sg]
+    flux_down = F.SurfaceFlux(field=H, surface=bottom, filename=None)
+    my_model.exports = [flux_lg, flux_sg, flux_down]
 
     my_model.initialise()
 
@@ -207,23 +210,40 @@ for temperature in temperatures:
     if RANK == 0 and len(all_pbs) > 0:
         t_arr = np.array(flux_lg.t, dtype=float)
         pb_arr = np.array(all_pbs, dtype=float)
+        flux_down_arr = np.array(flux_down.data, dtype=float)
 
-        csv_pb = os.path.join(OUTDIR, f"pb_{T_label_from_temperature(temperature)}.csv")
+        csv_pb = os.path.join(
+            OUTDIR, f"pb_and_fluxdown_{T_label_from_temperature(temperature)}.csv"
+        )
         np.savetxt(
             csv_pb,
-            np.column_stack([t_arr, pb_arr]),
+            np.column_stack([t_arr, pb_arr, flux_down_arr]),
             delimiter=",",
-            header="t,p_b",
+            header="t,p_b,flux_down",
             comments="",
         )
 
         if ax_pb is not None:
             ax_pb.plot(t_arr, pb_arr, label=T_label_from_temperature(temperature))
 
-if RANK == 0 and ax_pb is not None:
+        if ax_flux is not None:
+            ax_flux.plot(
+                t_arr,
+                flux_down_arr,
+                label=f"flux_down, {T_label_from_temperature(temperature)}",
+            )
+
+if RANK == 0:
     ax_pb.set_xlabel("Time (s)")
     ax_pb.set_ylabel("Bubble pressure (Pa)")
     ax_pb.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
     fig_pb.tight_layout()
     fig_pb.savefig(os.path.join(OUTDIR, "pb_all_temperatures.png"), dpi=200)
     plt.close(fig_pb)
+
+    ax_flux.set_xlabel("Time (s)")
+    ax_flux.set_ylabel("Downstream flux (H/s)")
+    ax_flux.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig_flux.tight_layout()
+    fig_flux.savefig(os.path.join(OUTDIR, "flux_down_all_temperatures.png"), dpi=200)
+    plt.close(fig_flux)
