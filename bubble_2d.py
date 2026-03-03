@@ -51,6 +51,7 @@ class Custom2DProblem(F.HydrogenTransportProblemDiscontinuous):
         j_solid_gas = float(flux_sg.value)
 
         Fnet = j_liquid_gas * L35 + j_solid_gas * L36
+        # Fnet = j_liquid_gas + j_solid_gas
 
         new_N_b = max(old_N_b + float(self.dt.value) * Fnet, 0.0)
         new_pb = max(new_N_b * R_gas * temperature / V_b, 0.0)
@@ -71,10 +72,19 @@ if RANK == 0:
     os.makedirs(OUTDIR, exist_ok=True)
 
 fig_pb, ax_pb = None, None
-fig_flux, ax_flux = None, None
+fig_flux_in, ax_flux_in = None, None
+
+fig_flux_down, ax_flux_down = None, None
+fig_flux_lg, ax_flux_lg = None, None
+fig_flux_sg, ax_flux_sg = None, None
+
+
 if RANK == 0:
     fig_pb, ax_pb = plt.subplots(1, 1)
-    fig_flux, ax_flux = plt.subplots(1, 1)
+    fig_flux_in, ax_flux_in = plt.subplots(1, 1)
+    fig_flux_down, ax_flux_down = plt.subplots(1, 1)
+    fig_flux_lg, ax_flux_lg = plt.subplots(1, 1)
+    fig_flux_sg, ax_flux_sg = plt.subplots(1, 1)
 
 D_0_solid, E_D_solid = 2, 0.0
 K_S_0_solid, E_K_S_solid = 3, 0.2
@@ -90,7 +100,7 @@ RTOL = 1e-8
 R_gas = 8.314
 V_b = 10000
 
-t_total = 1000
+t_total = 200
 
 c_up = 1.0
 c_down = 0.0
@@ -100,6 +110,7 @@ Te_Cs = (500, 550, 600, 650, 700)
 temperatures = tuple(float(T) + 273.15 for T in Te_Cs)
 
 for temperature in temperatures:
+    # for temperature in [773.15]:  # Just one temperature for now
     mat_solid = F.Material(
         D_0=D_0_solid,
         E_D=E_D_solid,
@@ -198,7 +209,12 @@ for temperature in temperatures:
     flux_lg = F.SurfaceFlux(field=H, surface=liquid_gas_surface, filename=None)
     flux_sg = F.SurfaceFlux(field=H, surface=solid_gas_surface, filename=None)
     flux_down = F.SurfaceFlux(field=H, surface=bottom, filename=None)
-    my_model.exports = [flux_lg, flux_sg, flux_down]
+    flux_in = F.SurfaceFlux(field=H, surface=top, filename=None)
+
+    # liquid = F.VTXSpeciesExport(filename="H_salt.bp", field=H, subdomain=liquid_volume)
+    # solid = F.VTXSpeciesExport(filename="H_metal.bp", field=H, subdomain=solid_volume)
+
+    my_model.exports = [flux_lg, flux_sg, flux_down, flux_in]  # liquid, solid]
 
     my_model.initialise()
 
@@ -211,6 +227,9 @@ for temperature in temperatures:
         t_arr = np.array(flux_lg.t, dtype=float)
         pb_arr = np.array(all_pbs, dtype=float)
         flux_down_arr = np.array(flux_down.data, dtype=float)
+        flux_in_arr = np.array(flux_in.data, dtype=float)
+        flux_lg_arr = np.array(flux_lg.data, dtype=float)
+        flux_sg_arr = np.array(flux_sg.data, dtype=float)
 
         csv_pb = os.path.join(
             OUTDIR, f"pb_and_fluxdown_{T_label_from_temperature(temperature)}.csv"
@@ -226,11 +245,32 @@ for temperature in temperatures:
         if ax_pb is not None:
             ax_pb.plot(t_arr, pb_arr, label=T_label_from_temperature(temperature))
 
-        if ax_flux is not None:
-            ax_flux.plot(
+        if ax_flux_in is not None:
+            ax_flux_in.plot(
+                t_arr,
+                flux_in_arr,
+                label=f"flux_in, {T_label_from_temperature(temperature)}",
+            )
+
+        if ax_flux_down is not None:
+            ax_flux_down.plot(
                 t_arr,
                 flux_down_arr,
                 label=f"flux_down, {T_label_from_temperature(temperature)}",
+            )
+
+        if ax_flux_lg is not None:
+            ax_flux_lg.plot(
+                t_arr,
+                flux_lg_arr,
+                label=f"flux_lg, {T_label_from_temperature(temperature)}",
+            )
+
+        if ax_flux_sg is not None:
+            ax_flux_sg.plot(
+                t_arr,
+                flux_sg_arr,
+                label=f"flux_sg, {T_label_from_temperature(temperature)}",
             )
 
 if RANK == 0:
@@ -241,9 +281,32 @@ if RANK == 0:
     fig_pb.savefig(os.path.join(OUTDIR, "pb_all_temperatures.png"), dpi=200)
     plt.close(fig_pb)
 
-    ax_flux.set_xlabel("Time (s)")
-    ax_flux.set_ylabel("Downstream flux (H/s)")
-    ax_flux.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
-    fig_flux.tight_layout()
-    fig_flux.savefig(os.path.join(OUTDIR, "flux_down_all_temperatures.png"), dpi=200)
-    plt.close(fig_flux)
+    ax_flux_in.set_xlabel("Time (s)")
+    ax_flux_in.set_ylabel("Upstream flux (H/s)")
+    ax_flux_in.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig_flux_in.tight_layout()
+    fig_flux_in.savefig(os.path.join(OUTDIR, "flux_in_all_temperatures.png"), dpi=200)
+    plt.close(fig_flux_in)
+
+    ax_flux_down.set_xlabel("Time (s)")
+    ax_flux_down.set_ylabel("Downstream flux (H/s)")
+    ax_flux_down.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig_flux_down.tight_layout()
+    fig_flux_down.savefig(
+        os.path.join(OUTDIR, "flux_down_all_temperatures.png"), dpi=200
+    )
+    plt.close(fig_flux_down)
+
+    ax_flux_lg.set_xlabel("Time (s)")
+    ax_flux_lg.set_ylabel("Liquid-gas flux (H/s)")
+    ax_flux_lg.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig_flux_lg.tight_layout()
+    fig_flux_lg.savefig(os.path.join(OUTDIR, "flux_lg_all_temperatures.png"), dpi=200)
+    plt.close(fig_flux_lg)
+
+    ax_flux_sg.set_xlabel("Time (s)")
+    ax_flux_sg.set_ylabel("Solid-gas flux (H/s)")
+    ax_flux_sg.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig_flux_sg.tight_layout()
+    fig_flux_sg.savefig(os.path.join(OUTDIR, "flux_sg_all_temperatures.png"), dpi=200)
+    plt.close(fig_flux_sg)
