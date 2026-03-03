@@ -63,12 +63,14 @@ c_down = 0.0
 Te_Cs = (500, 550, 600, 650, 700)
 temperatures = tuple(float(T) + 273.15 for T in Te_Cs)
 
-fig_nb, ax_nb = (None, None)
+fig_in, ax_in = (None, None)
+fig_down, ax_down = (None, None)
 if RANK == 0:
-    fig_nb, ax_nb = plt.subplots(1, 1)
-    fig_flux, ax_flux = plt.subplots(1, 1)
+    fig_in, ax_in = plt.subplots(1, 1)
+    fig_down, ax_down = plt.subplots(1, 1)
 
 for temperature in temperatures:
+    # for temperature in [773.15]:  # Just one temperature for now
     mat_solid = F.Material(
         D_0=D_0_solid,
         E_D=E_D_solid,
@@ -135,35 +137,69 @@ for temperature in temperatures:
     )
 
     flux_down = F.SurfaceFlux(field=H, surface=bottom, filename=None)
-    my_model.exports = [flux_down]
+    flux_in = F.SurfaceFlux(field=H, surface=top, filename=None)
+    my_model.exports = [flux_down, flux_in]
+
+    # solid = F.VTXSpeciesExport(
+    #     filename="H_metal_noBubble.bp", field=H, subdomain=solid_volume
+    # )
+    # salt = F.VTXSpeciesExport(
+    #     filename="H_salt_noBubble.bp", field=H, subdomain=liquid_volume
+    # )
+
+    # my_model.exports = [flux_down]  # solid, salt]
 
     my_model.initialise()
     my_model.run()
 
     if RANK == 0:
         t_arr = np.array(flux_down.t, dtype=float)
-        j_arr = np.array(flux_down.data, dtype=float)
+        j_down_arr = np.array(flux_down.data, dtype=float)
+        j_in_arr = np.array(flux_in.data, dtype=float)
 
         csv_flux = os.path.join(
             OUTDIR, f"noBubble_fluxDown_{T_label_from_temperature(temperature)}.csv"
         )
         np.savetxt(
             csv_flux,
-            np.column_stack([t_arr, j_arr]),
+            np.column_stack([t_arr, j_down_arr]),
             delimiter=",",
             header="t,flux_down",
             comments="",
         )
 
-        if ax_nb is not None:
-            ax_nb.plot(t_arr, j_arr, label=T_label_from_temperature(temperature))
+        csv_flux_in = os.path.join(
+            OUTDIR, f"noBubble_fluxIn_{T_label_from_temperature(temperature)}.csv"
+        )
+        np.savetxt(
+            csv_flux_in,
+            np.column_stack([t_arr, j_in_arr]),
+            delimiter=",",
+            header="t,flux_in",
+            comments="",
+        )
 
-if RANK == 0 and ax_nb is not None:
-    ax_nb.set_xlabel("Time (s)")
-    ax_nb.set_ylabel("Downstream flux (no bubble)")
-    ax_nb.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
-    fig_nb.tight_layout()
-    fig_nb.savefig(
+        if ax_in is not None:
+            ax_in.plot(t_arr, j_in_arr, label=T_label_from_temperature(temperature))
+
+        if ax_down is not None:
+            ax_down.plot(t_arr, j_down_arr, label=T_label_from_temperature(temperature))
+
+if RANK == 0:
+    ax_in.set_xlabel("Time (s)")
+    ax_in.set_ylabel("Upstream flux (H/s)")
+    ax_in.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig_in.tight_layout()
+    fig_in.savefig(
+        os.path.join(OUTDIR, "noBubble_fluxIn_all_temperatures.png"), dpi=200
+    )
+    plt.close(fig_in)
+
+    ax_down.set_xlabel("Time (s)")
+    ax_down.set_ylabel("Downstream flux (H/s)")
+    ax_down.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig_down.tight_layout()
+    fig_down.savefig(
         os.path.join(OUTDIR, "noBubble_fluxDown_all_temperatures.png"), dpi=200
     )
-    plt.close(fig_nb)
+    plt.close(fig_down)
