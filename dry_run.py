@@ -1,293 +1,276 @@
 from mesh import generate_mesh
-from dolfinx.log import set_log_level, LogLevel
+
 from cylindrical_flux import CylindricalFlux
-from dolfinx.io import gmshio
+from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 import festim as F
 import h_transport_materials as htm
 
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
-set_log_level(LogLevel.INFO)
+COMM = MPI.COMM_WORLD
+RANK = COMM.rank
+
+OUTDIR = "dry_run_outputs"
+if RANK == 0:
+    os.makedirs(OUTDIR, exist_ok=True)
 
 generate_mesh(mesh_size=2e-4)
 model_rank = 0
-mesh, cell_tags, facet_tags = gmshio.read_from_msh(
-    "mesh_solid_only.msh", MPI.COMM_WORLD, model_rank
-)
+_read = gmshio.read_from_msh("mesh_solid_only.msh", MPI.COMM_WORLD, model_rank)
+mesh = _read.mesh
+cell_tags = _read.cell_tags
+facet_tags = _read.facet_tags
 
-# filter nickel and H
 diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(isotope="h")
-solubilities_nickel = htm.solubilities.filter(material="nickel").filter(isotope="h")
+perms_nickel = htm.permeabilities.filter(material="nickel").filter(isotope="h")
 
-# material parameters for Nickel
-# D_solid = diffusivities_nickel[0].pre_exp.magnitude  # m^2/s
-# E_D_solid = diffusivities_nickel[0].act_energy.magnitude  # ev/particle
-# K_solid = solubilities_nickel[0].pre_exp.magnitude  # particle m^-3 Pa^-0.5
-# E_K_S_solid = solubilities_nickel[0].act_energy.magnitude  # ev/particle
+D_solid_obj = diffusivities_nickel[-1]
 
-# print("solubilities_nickel")
-# print(solubilities_nickel[0].value(773))
-# print("diffusivities_nickel")
-# print(diffusivities_nickel[0].value(773))
-# print("permeabilities_nickel")
-# print(solubilities_nickel[0].value(773) * diffusivities_nickel[0].value(773))
-# exit()
 
-D_solid = diffusivities_nickel[0].pre_exp.magnitude  # m^2/s
-E_D_solid = diffusivities_nickel[0].act_energy.magnitude  # ev/particle
-K_solid = solubilities_nickel[0].pre_exp.magnitude  # particle m^-3 Pa^-0.5
-E_K_S_solid = solubilities_nickel[0].act_energy.magnitude  # ev/particle
+wanted = ["lee", "yamanishi", "masui"]
+candidates = []
+for p in perms_nickel:
+    a = str(getattr(p, "author", "")).lower()
+    if any(w in a for w in wanted):
+        candidates.append(p)
 
-# print("solubilities_nickel")
-# print(solubilities_nickel[0])
-# print("diffusivities_nickel")
-# print(diffusivities_nickel[1])
-# # print("permeabilities_nickel")
-# # print(solubilities_nickel[0].value(773) * diffusivities_nickel[1].value(773))
-# exit()
 
-mat_solid = F.Material(
-    D_0=D_solid,
-    E_D=E_D_solid,
-    K_S_0=K_solid,
-    E_K_S=E_K_S_solid,
-    solubility_law="sievert",
-)
+def pick_unique_three(perms):
+    picked = {}
+    for p in perms:
+        a = str(getattr(p, "author", "")).lower()
+        for key in wanted:
+            if key in a and key not in picked:
+                picked[key] = p
+    return [picked[k] for k in wanted if k in picked]
 
-solid_volume = F.VolumeSubdomain(id=2, material=mat_solid)
+
+chosen_perms = pick_unique_three(candidates)
+
+solid_volume = F.VolumeSubdomain(id=2, material=None)
 
 out_surf = F.SurfaceSubdomain(id=3)
-# left_bc_liquid = F.SurfaceSubdomain(id=41)
+
 left_bc_top_Ni = F.SurfaceSubdomain(id=42)
 left_bc_middle_Ni = F.SurfaceSubdomain(id=43)
 left_bc_bottom_Ni = F.SurfaceSubdomain(id=44)
+
 top_cap_Ni = F.SurfaceSubdomain(id=5)
 top_sidewall_Ni = F.SurfaceSubdomain(id=6)
 bottom_sidewall_Ni = F.SurfaceSubdomain(id=7)
+
 mem_Ni_top = F.SurfaceSubdomain(id=8)
 mem_Ni_bottom = F.SurfaceSubdomain(id=9)
+
 bottom_cap_Ni = F.SurfaceSubdomain(id=10)
 liquid_solid_interface = F.SurfaceSubdomain(id=99)
 
-
-my_model = F.HydrogenTransportProblemDiscontinuous()
-
-my_model.mesh = F.Mesh(mesh, coordinate_system="cylindrical")
-
-# we need to pass the meshtags to the model directly
-my_model.facet_meshtags = facet_tags
-my_model.volume_meshtags = cell_tags
-
-my_model.subdomains = [
-    solid_volume,
-    # fluid_volume,
-    out_surf,
-    # left_bc_liquid,
-    left_bc_top_Ni,
-    left_bc_middle_Ni,
-    left_bc_bottom_Ni,
-    top_cap_Ni,
-    top_sidewall_Ni,
-    bottom_sidewall_Ni,
-    mem_Ni_top,
-    mem_Ni_bottom,
-    bottom_cap_Ni,
-    liquid_solid_interface,
-]
-
-my_model.surface_to_volume = {
-    out_surf: solid_volume,
-    # left_bc_liquid: liquid_volume,
-    left_bc_top_Ni: solid_volume,
-    left_bc_middle_Ni: solid_volume,
-    left_bc_bottom_Ni: solid_volume,
-    top_cap_Ni: solid_volume,
-    top_sidewall_Ni: solid_volume,
-    bottom_sidewall_Ni: solid_volume,
-    mem_Ni_top: solid_volume,
-    mem_Ni_bottom: solid_volume,
-    bottom_cap_Ni: solid_volume,
-}
-
-H = F.Species("H", subdomains=my_model.volume_subdomains)
-my_model.species = [H]
-
-my_model.temperature = 973
-
 upstream_volume_surfaces = [mem_Ni_bottom, bottom_cap_Ni, bottom_sidewall_Ni]
-
 downstream_volume_surfaces = [top_cap_Ni, top_sidewall_Ni, mem_Ni_top]
 
 
-# case 2: Outside BC as isolated (no flux)
-out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
+def make_outsurf_bc(mode: str, H: F.Species):
+    """
+    mode:
+      - "flux0": impose outsurface particle flux = 0
+      - "conc0": impose concentration = 0 at outsurface
+    """
+    mode = mode.lower().strip()
+    if mode == "flux0":
+        return F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
 
-# p_glovebox = 1  # Pa
-# out_surface_bc = F.SievertsBC(
-#     subdomain=out_surf, species=H, pressure=p_glovebox, S_0=K_solid, E_S=E_K_S_solid
-# )
-
-# 773 K run 1
-# P_up = 1.30e5  # Pa
-# P_down = 1.98e2  # Pa
-
-# 773 K run 2
-# P_up = 1.10e5  # Pa
-# P_down = 1.79e2  # Pa
-
-# 873 K run 1
-# P_up = 1.30e5  # Pa
-# P_down = 4.59e2  # Pa
-
-# # 873 K run 2
-# P_up = 1.10e5  # Pa
-# P_down = 4.02e2  # Pa
-
-# 973 K run 1
-# P_up = 1.30e5  # Pa
-# P_down = 8.16e2  # Pa
-
-# 973 K run 2
-P_up = 1.08e5  # Pa
-P_down = 7.36e2  # Pa
-my_model.boundary_conditions = (
-    [
-        F.SievertsBC(
-            subdomain=s, species=H, pressure=P_up, S_0=K_solid, E_S=E_K_S_solid
-        )  ###NOTE: E_s can not be 0.
-        for s in upstream_volume_surfaces
-    ]
-    + [out_surface_bc]
-    + [
-        F.SievertsBC(
-            subdomain=s, species=H, pressure=P_down, S_0=K_solid, E_S=E_K_S_solid
+    if mode == "conc0":
+        if hasattr(F, "DirichletBC"):
+            return F.DirichletBC(subdomain=out_surf, species=H, value=0.0)
+        if hasattr(F, "FixedConcentrationBC"):
+            return F.FixedConcentrationBC(subdomain=out_surf, species=H, value=0.0)
+        raise AttributeError(
+            "Cannot find a concentration Dirichlet BC in festim. "
+            "Tried F.DirichletBC and F.FixedConcentrationBC."
         )
-        for s in downstream_volume_surfaces
-    ]
-)
 
-my_model.settings = F.Settings(atol=1e-10, rtol=1e-10, transient=False)
+    raise ValueError(f"Unknown outsurface BC mode: {mode}. Use 'flux0' or 'conc0'.")
 
 
-fluxes_in = [
-    CylindricalFlux(field=H, surface=surf) for surf in upstream_volume_surfaces
-]
-downstream_fluxes = [
-    CylindricalFlux(field=H, surface=surf) for surf in downstream_volume_surfaces
-]
-glovebox_flux = CylindricalFlux(field=H, surface=out_surf)
-
-flux_out_membrane = CylindricalFlux(field=H, surface=mem_Ni_top)
-flux_out_Ds_ni_left = CylindricalFlux(field=H, surface=top_sidewall_Ni)
-flux_out_top_cap_Ni = CylindricalFlux(field=H, surface=top_cap_Ni)
-
-
-my_model.exports = [
-    F.VTXSpeciesExport(
-        field=H, filename="out-species_dry_run.bp", subdomain=solid_volume
-    ),
-]
-my_model.exports += downstream_fluxes
-my_model.exports += fluxes_in
-my_model.exports += [glovebox_flux]
-my_model.exports += [flux_out_membrane]
-my_model.exports += [flux_out_Ds_ni_left]
-my_model.exports += [flux_out_top_cap_Ni]
-
-my_model.initialise()
-my_model.run()
-
-
-total_flux_glovebox = glovebox_flux.value
-total_downstream_flux = sum(flux.value for flux in downstream_fluxes)
-total_flux_in = sum(flux.value for flux in fluxes_in)
-
-
-print(f"Flux in: {total_flux_in:.4e} H/s")
-print(f"Flux out to glovebox: {total_flux_glovebox:.4e} H/s")
-print(f"Total downstream flux: {total_downstream_flux:.4e} H/s")
-print(f"flux through membrane top: {flux_out_membrane.value:.4e} H/s")
-print(f"flux through nickel downstream sidewall: {flux_out_Ds_ni_left.value:.4e} H/s")
-print(
-    f"flux through nickel downstream top surface: {flux_out_top_cap_Ni.value:.4e} H/s"
-)
-print("-----")
-print(
-    f"Flux balance: {total_flux_in + total_flux_glovebox + total_downstream_flux:.4e} H/s"
-)
-
-# Build data
-fluxes = {
-    # "experiment run 1 (P=5.557e13)": 4.5268e16,  # experimental value from run 1 in 773 K
-    # "experiment run 2 (P=5.457e13)": 4.0832e16,  # experimental value from run 2 in 773 K
-    # "experiment run 1 (P=1.292e14)": 1.0295e17,  # experimental value from run 1 in 873 K
-    # "experiment run 2 (P=1.254e14)": 9.1903e16,  # experimental value from run 2 in 873 K
-    # "experiment run 1 (P=2.368e14)": 1.8485e17,  # experimental value from run 1 in 973 K
-    "experiment run 2 (P=2.308e14)": 1.6525e17,  # experimental value from run 2 in 973 K
-    "Flux in (upstream)": float(total_flux_in),
-    "Flux out to glovebox": float(total_flux_glovebox),
-    "Total downstream flux": float(total_downstream_flux),
-    "Flux through membrane surface": float(flux_out_membrane.value),
-    "Flux through Ni downstream sidewall": float(flux_out_Ds_ni_left.value),
-    "Flux through Ni downstream top surface": float(flux_out_top_cap_Ni.value),
-    "Flux balance (in + glovebox + downstream)": float(
-        total_flux_in + total_flux_glovebox + total_downstream_flux
-    ),
-}
-
-labels = list(fluxes.keys())
-values = np.array([fluxes[k] for k in labels], dtype=float)
-
-x = np.arange(len(labels))
-fig, ax = plt.subplots(figsize=(12, 6))
-
-# Colors: blue for ≥0, red for <0
-colors = ["blue" if v >= 0 else "red" for v in values]
-
-heights = np.abs(values)
-bars = ax.bar(x, heights, color=colors)
-
-y_offset = 0.05 * np.max(heights) if np.max(heights) > 0 else 1.0
-for i, (bar, v) in enumerate(zip(bars, values)):
-    y = bar.get_height() + (y_offset if v >= 0 else y_offset)
-    ax.text(
-        bar.get_x() + bar.get_width() / 2.0,
-        y,
-        f"{v:.2e}",
-        ha="center",
-        va="bottom",
-        rotation=0,
-        fontsize=18,
+def make_solid_material_from_perm(D_obj, perm_obj) -> F.Material:
+    K_obj = htm.Solubility(
+        S_0=perm_obj.pre_exp / D_obj.pre_exp,
+        E_S=perm_obj.act_energy - D_obj.act_energy,
+        law=getattr(perm_obj, "law", "sievert"),
+    )
+    return F.Material(
+        D_0=D_obj.pre_exp.magnitude,
+        E_D=D_obj.act_energy.magnitude,
+        K_S_0=K_obj.pre_exp.magnitude,
+        E_K_S=K_obj.act_energy.magnitude,
+        solubility_law="sievert",
     )
 
-# Axes labels / ticks
-ax.set_xticks(x)
-ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=18)
-ax.set_ylabel("Flux [H/s]", fontsize=18)
-ax.tick_params(axis="y", labelsize=18)
-ax.yaxis.get_offset_text().set_fontsize(18)
 
-# Permeability shown in the title (evaluate at 773 K)
-# P_773 = (
-#     solubilities_nickel[0].value(773) * diffusivities_nickel[0].value(773)
-# ).magnitude
+# -----------------------------
+def run_one_temperature(
+    T_K: float, P_up: float, P_down: float, outsurf_mode: str, mat_solid: F.Material
+):
+    solid_volume.material = mat_solid
 
-# Permeability shown in the title (evaluate at 873 K)
-# P_873 = (
-#     solubilities_nickel[0].value(873) * diffusivities_nickel[0].value(873)
-# ).magnitude
+    my_model = F.HydrogenTransportProblemDiscontinuous()
+    my_model.mesh = F.Mesh(mesh, coordinate_system="cylindrical")
+    my_model.facet_meshtags = facet_tags
+    my_model.volume_meshtags = cell_tags
 
-# Permeability shown in the title (evaluate at 973 K)
-P_973 = (
-    solubilities_nickel[0].value(973) * diffusivities_nickel[0].value(973)
-).magnitude
-ax.set_title(
-    f"Fluxes in the system (red = negative). Permeability at 973 K: {P_973:.3e}",
-    fontsize=18,
-)
+    my_model.subdomains = [
+        solid_volume,
+        out_surf,
+        left_bc_top_Ni,
+        left_bc_middle_Ni,
+        left_bc_bottom_Ni,
+        top_cap_Ni,
+        top_sidewall_Ni,
+        bottom_sidewall_Ni,
+        mem_Ni_top,
+        mem_Ni_bottom,
+        bottom_cap_Ni,
+        liquid_solid_interface,
+    ]
 
-ax.margins(y=0.15)
-fig.tight_layout()
-plt.show()
+    my_model.surface_to_volume = {
+        out_surf: solid_volume,
+        left_bc_top_Ni: solid_volume,
+        left_bc_middle_Ni: solid_volume,
+        left_bc_bottom_Ni: solid_volume,
+        top_cap_Ni: solid_volume,
+        top_sidewall_Ni: solid_volume,
+        bottom_sidewall_Ni: solid_volume,
+        mem_Ni_top: solid_volume,
+        mem_Ni_bottom: solid_volume,
+        bottom_cap_Ni: solid_volume,
+    }
+
+    H = F.Species("H", subdomains=my_model.volume_subdomains)
+    my_model.species = [H]
+    my_model.temperature = float(T_K)
+
+    out_surface_bc = make_outsurf_bc(outsurf_mode, H)
+
+    my_model.boundary_conditions = (
+        [
+            F.SievertsBC(
+                subdomain=s,
+                species=H,
+                pressure=float(P_up),
+                S_0=float(mat_solid.K_S_0),
+                E_S=float(mat_solid.E_K_S),
+            )
+            for s in upstream_volume_surfaces
+        ]
+        + [out_surface_bc]
+        + [
+            F.SievertsBC(
+                subdomain=s,
+                species=H,
+                pressure=float(P_down),
+                S_0=float(mat_solid.K_S_0),
+                E_S=float(mat_solid.E_K_S),
+            )
+            for s in downstream_volume_surfaces
+        ]
+    )
+
+    my_model.settings = F.Settings(atol=1e-10, rtol=1e-10, transient=False)
+
+    downstream_fluxes = [
+        CylindricalFlux(field=H, surface=s) for s in downstream_volume_surfaces
+    ]
+    my_model.exports = downstream_fluxes
+
+    my_model.initialise()
+    my_model.run()
+
+    total_downstream_flux = float(sum(flux.value for flux in downstream_fluxes))
+    return total_downstream_flux
+
+
+exp_cases = [
+    (500.0, "Run 1", 1.30e5, 1.98e2, 4.52e16),
+    (500.0, "Run 2", 1.10e5, 1.79e2, 4.08e16),
+    (600.0, "Run 1", 1.30e5, 4.59e2, 1.03e17),
+    (600.0, "Run 2", 1.10e5, 4.02e2, 9.19e16),
+    (700.0, "Run 1", 1.30e5, 8.16e2, 1.85e17),
+    (700.0, "Run 2", 1.10e5, 7.36e2, 1.65e17),
+]
+exp_cases = [(T, run, pup, pdown, flux / 2.0) for T, run, pup, pdown, flux in exp_cases]
+
+T_C = np.array([c[0] for c in exp_cases], dtype=float)
+run_labels = [c[1] for c in exp_cases]
+exp_flux = np.array([c[4] for c in exp_cases], dtype=float)
+
+idx1 = np.array([i for i, r in enumerate(run_labels) if r == "Run 1"], dtype=int)
+idx2 = np.array([i for i, r in enumerate(run_labels) if r == "Run 2"], dtype=int)
+
+modes = ["flux0", "conc0"]
+
+results = {}
+
+for perm in chosen_perms:
+    mat = make_solid_material_from_perm(D_solid_obj, perm)
+
+    for mode in modes:
+        flux_list = []
+        for t_c, run_id, P_up, P_down, _f_exp in exp_cases:
+            T_K = t_c + 273.15
+            f_model = run_one_temperature(
+                T_K=T_K,
+                P_up=P_up,
+                P_down=P_down,
+                outsurf_mode=mode,
+                mat_solid=mat,
+            )
+            flux_list.append(f_model)
+
+        results[(perm.author, mode)] = np.array(flux_list, dtype=float)
+
+
+def plot_run(run_name: str, idx: np.ndarray, fname: str):
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    ax.plot(
+        T_C[idx],
+        exp_flux[idx],
+        marker="o",
+        linewidth=2,
+        label=f"Experiment ({run_name})",
+    )
+
+    for perm in chosen_perms:
+        for mode in modes:
+            y = results[(perm.author, mode)][idx]
+            label = f"{perm.author} | out: {'flux=0' if mode == 'flux0' else 'C=0'}"
+            ax.plot(
+                T_C[idx],
+                y,
+                marker="s" if mode == "flux0" else "^",
+                linewidth=2,
+                label=label,
+            )
+
+    ax.set_xlabel("Temperature [°C]")
+    ax.set_ylabel("Downstream flux [H/s]")
+    ax.set_title(
+        f"{run_name}: downstream flux (3 permeabilities × 2 out-surface BC) vs exp"
+    )
+    ax.grid(True, alpha=0.3)
+    ax.legend(ncol=2, fontsize=9)
+    fig.tight_layout()
+
+    fpath = os.path.join(OUTDIR, fname)
+    fig.savefig(fpath, dpi=300)
+    plt.close(fig)
+    print(f"Saved: {fpath}")
+
+
+if RANK == 0:
+    plot_run("Run 1", idx1, "compare_run1_7curves.png")
+    plot_run("Run 2", idx2, "compare_run2_7curves.png")
