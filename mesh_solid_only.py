@@ -22,9 +22,7 @@ def generate_mesh(mesh_size=2e-4, fname="mesh_solid_only.msh"):
     gmsh.model.occ.addRectangle(0, y0, 0, x_in, y_bT - y0, tag=1)
     gmsh.model.occ.addRectangle(0, y_mB, 0, x_in, y_mT - y_mB, tag=2)
     gmsh.model.occ.addRectangle(0, y_tIn, 0, x_in, y_tOut - y_tIn, tag=3)
-    gmsh.model.occ.addRectangle(
-        x_in, y0, 0, x_out - x_in, y_tOut - y0, tag=4
-    )
+    gmsh.model.occ.addRectangle(x_in, y0, 0, x_out - x_in, y_tOut - y0, tag=4)
     # salt_rectangle = gmsh.model.occ.addRectangle(0, y_mT, 0, x_in, y_fT - y_mT, tag=5)
 
     # fuse all solid parts
@@ -71,9 +69,7 @@ def generate_mesh(mesh_size=2e-4, fname="mesh_solid_only.msh"):
     bottom_cap_Ni = gmsh.model.addPhysicalGroup(1, [11], tag=10)
     gmsh.model.setPhysicalName(1, bottom_cap_Ni, "bottom_cap_Ni")
 
-    set(
-        gmsh.model.getBoundary([(2, 10)], oriented=False, recursive=False)
-    )
+    set(gmsh.model.getBoundary([(2, 10)], oriented=False, recursive=False))
 
     # set CharacteristicLengthMax
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_size)
@@ -85,9 +81,9 @@ def generate_mesh(mesh_size=2e-4, fname="mesh_solid_only.msh"):
     # write to file
     gmsh.write(fname)
 
-    # gmsh.finalize()
+    gmsh.finalize()
 
 
 if __name__ == "__main__":
     generate_mesh()
-    gmsh.fltk.run()
+    # gmsh.fltk.run()
