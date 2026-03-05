@@ -407,7 +407,7 @@ def _collect_points_for_cases(
                         P_down=float(cond["P_down"]),
                         P_gb=float(cond.get("P_gb")) if "P_gb" in cond else None,
                         y_ft=y5,
-                        J_exp=float(cond["J_exp"]),
+                        J_exp=float(cond["J_exp"]) / 2.0,
                     )
                 )
     if not pts:
@@ -1038,41 +1038,42 @@ if __name__ == "__main__":
     swap_infinite = {
         500.0: {
             "runs": {
-                "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
+                # "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
                 "Run 2": {"P_up": 1.31e5, "P_down": 1.99e1, "J_exp": 4.34e15},
             }
         },
         550.0: {
             "runs": {
-                "Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15},
+                # "Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15},
                 "Run 2": {"P_up": 1.31e5, "P_down": 3.89e1, "J_exp": 8.58e15},
             }
         },
         600.0: {
             "runs": {
-                "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
+                # "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
             }
         },
-        # 650.0: {
-        #     "runs": {"Run 2": {"P_up": 1.32e5, "P_down": 5.02e1, "J_exp": 1.10e16}}
-        # },
-        # 700.0: {
-        #     "runs": {
-        #         "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
-        #         "Run 2": {"P_up": 1.32e5, "P_down": 4.78e1, "J_exp": 1.04e16},
-        #     }
-        # },
+        650.0: {
+            "runs": {"Run 2": {"P_up": 1.32e5, "P_down": 5.02e1, "J_exp": 1.10e16}}
+        },
+        700.0: {
+            "runs": {
+                #         "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
+                "Run 2": {"P_up": 1.32e5, "P_down": 4.78e1, "J_exp": 1.04e16},
+            }
+        },
     }
+
     swap_transparent = {
         500.0: {
             "runs": {
-                "Run 1": {
-                    "P_up": 1.31e5,
-                    "P_down": 1.77e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 3.89e15,
-                },
+                # "Run 1": {
+                #     "P_up": 1.31e5,
+                #     "P_down": 1.77e1,
+                #     "P_gb": 1e-30,
+                #     "J_exp": 3.89e15,
+                # },
                 "Run 2": {
                     "P_up": 1.31e5,
                     "P_down": 1.99e1,
@@ -1083,12 +1084,12 @@ if __name__ == "__main__":
         },
         550.0: {
             "runs": {
-                "Run 1": {
-                    "P_up": 1.31e5,
-                    "P_down": 3.21e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 7.20e15,
-                },
+                # "Run 1": {
+                #     "P_up": 1.31e5,
+                #     "P_down": 3.21e1,
+                #     "P_gb": 1e-30,
+                #     "J_exp": 7.20e15,
+                # },
                 "Run 2": {
                     "P_up": 1.31e5,
                     "P_down": 3.89e1,
@@ -1099,12 +1100,12 @@ if __name__ == "__main__":
         },
         600.0: {
             "runs": {
-                "Run 1": {
-                    "P_up": 1.33e5,
-                    "P_down": 3.57e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 7.64e15,
-                },
+                # "Run 1": {
+                #     "P_up": 1.33e5,
+                #     "P_down": 3.57e1,
+                #     "P_gb": 1e-30,
+                #     "J_exp": 7.64e15,
+                # },
                 "Run 2": {
                     "P_up": 1.32e5,
                     "P_down": 4.62e1,
@@ -1113,32 +1114,32 @@ if __name__ == "__main__":
                 },
             }
         },
-        # 650.0: {
-        #     "runs": {
-        #         "Run 2": {
-        #             "P_up": 1.32e5,
-        #             "P_down": 5.02e1,
-        #             "P_gb": 1e-30,
-        #             "J_exp": 1.10e16,
-        #         },
-        #     }
-        # },
-        # 700.0: {
-        #     "runs": {
-        #         "Run 1": {
-        #             "P_up": 1.32e5,
-        #             "P_down": 4.07e1,
-        #             "P_gb": 1e-30,
-        #             "J_exp": 9.04e15,
-        #         },
-        #         "Run 2": {
-        #             "P_up": 1.32e5,
-        #             "P_down": 4.78e1,
-        #             "P_gb": 1e-30,
-        #             "J_exp": 1.04e16,
-        #         },
-        #     }
-        # },
+        650.0: {
+            "runs": {
+                "Run 2": {
+                    "P_up": 1.32e5,
+                    "P_down": 5.02e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 1.10e16,
+                },
+            }
+        },
+        700.0: {
+            "runs": {
+                # "Run 1": {
+                #     "P_up": 1.32e5,
+                #     "P_down": 4.07e1,
+                #     "P_gb": 1e-30,
+                #     "J_exp": 9.04e15,
+                # },
+                "Run 2": {
+                    "P_up": 1.32e5,
+                    "P_down": 4.78e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 1.04e16,
+                },
+            }
+        },
     }
 
     cases = {
