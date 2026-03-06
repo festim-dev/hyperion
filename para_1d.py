@@ -32,6 +32,78 @@ def flibe_thickness_from_T_C(T_C: float) -> float:
     return float(np.interp(T_C, temps, Ls))
 
 
+# ------------------------------ Ni update by outside BC ------------------------------
+def kJmol_to_eV(E_kJmol: float) -> float:
+    # 1 eV per molecule = 96.485332123... kJ/mol
+    return float(E_kJmol) / 96.485332123
+
+
+NA = 6.02214076e23
+CONVERT_MOL_TO_PARTICLE = True
+
+P0_COATED_INPUT = 5.1961839671e-08  # "no flux bc" / ideal coating
+EP_COATED_KJMOL = 45.501620
+
+P0_UNCOATED_INPUT = 4.5163359858e-07  # "no coating bc"
+EP_UNCOATED_KJMOL = 57.591963
+
+
+def _to_particle_P0(P0_in: float) -> float:
+    return float(P0_in) * NA if CONVERT_MOL_TO_PARTICLE else float(P0_in)
+
+
+NI_PERM_BY_OUTBC = {
+    "particle_flux_zero": dict(
+        P0=_to_particle_P0(P0_COATED_INPUT), EP_kJmol=EP_COATED_KJMOL
+    ),
+    "sieverts": dict(P0=_to_particle_P0(P0_UNCOATED_INPUT), EP_kJmol=EP_UNCOATED_KJMOL),
+}
+
+
+def make_ni_solubility_from_perm(
+    D_nickel: htm.Diffusivity, P0_particle: float, EP_kJmol: float
+):
+    """
+    Build a Ni solubility object consistent with:
+      - Ni diffusivity D_nickel (kept as-is)
+      - Ni permeability (Sieverts law) given by (P0, EP)
+    using S(T) = P(T) / D(T).
+    """
+    perm_ni = htm.Permeability(
+        pre_exp=float(P0_particle),
+        act_energy=kJmol_to_eV(float(EP_kJmol)),
+        law="sievert",
+    )
+
+    K_S_ni = htm.Solubility(
+        S_0=perm_ni.pre_exp / D_nickel.pre_exp,
+        E_S=perm_ni.act_energy - D_nickel.act_energy,
+        law="sievert",
+    )
+    return K_S_ni
+
+
+def pick_ni_solubility_for_outbc(
+    out_bc: dict, D_nickel: htm.Diffusivity
+) -> htm.Solubility:
+    t = (out_bc or {}).get("type", "particle_flux_zero")
+    t = str(t).lower()
+    if t not in NI_PERM_BY_OUTBC:
+        t = "particle_flux_zero"
+    prm = NI_PERM_BY_OUTBC[t]
+    return make_ni_solubility_from_perm(D_nickel, prm["P0"], prm["EP_kJmol"])
+
+
+def outbc_from_outmode(out_mode: str, P_gb_default: float = 1e-30) -> dict:
+    out_mode = (out_mode or "").lower()
+    if out_mode == "sieverts":
+        return {"type": "sieverts", "pressure": P_gb_default}
+    elif out_mode == "particle_flux_zero":
+        return {"type": "particle_flux_zero"}
+    else:
+        return {"type": "particle_flux_zero"}
+
+
 # ------------------------------ 1D cylindrical flux ------------------------------
 class CylindricalFlux1D(F.SurfaceFlux):
     """
@@ -381,11 +453,21 @@ def run_all_cases_1d(
     """
     Loop over all (case, T_C, run) and return a flat list of results
     J_sim and J_out are both the 1D outlet flux [H/s].
+
+    Ni logic:
+      - keep D_nickel fixed
+      - choose Ni permeability by case outside-BC type
+      - overwrite Ni solubility via S(T) = P(T) / D(T)
     """
     all_results: List[dict] = []
 
     for case_name, case_cfg in cases.items():
         table = case_cfg["table"]
+        out_mode = case_cfg.get("out_mode", "particle_flux_zero")
+
+        # --------- same Ni logic as your 2D code
+        out_bc_rep = outbc_from_outmode(out_mode)
+        K_S_nickel_case = pick_ni_solubility_for_outbc(out_bc_rep, D_nickel)
 
         for Tc, entry in table.items():
             runs = entry.get("runs", {})
@@ -406,7 +488,7 @@ def run_all_cases_1d(
                     D_flibe=D_flibe,
                     D_nickel=D_nickel,
                     permeability_flibe=perm_flibe,
-                    K_S_nickel=K_S_nickel,
+                    K_S_nickel=K_S_nickel_case,
                     L_Ni=L_Ni,
                     radius=radius,
                     run_name=run_name,
@@ -430,6 +512,9 @@ def run_all_cases_1d(
                         "J_in": float(J_in),
                         "J_out": float(J_out),
                         "J_exp": float(cond.get("J_exp", np.nan)),
+                        "ni_out_mode": out_mode,
+                        "K_S_0_Ni": float(K_S_nickel_case.pre_exp.magnitude),
+                        "E_S_Ni": float(K_S_nickel_case.act_energy.magnitude),
                     }
                 )
 
@@ -437,6 +522,7 @@ def run_all_cases_1d(
                     print(
                         f"[1D] {case_name:>18s} | T={float(Tc):5.1f} °C | "
                         f"{run_name:>5s} | L_flibe={L_flibe:.5e} m | "
+                        f"Ni_mode={out_mode:>18s} | "
                         f"J_in={J_in:.3e} H/s | J_out={J_out:.3e} H/s"
                     )
 
@@ -527,6 +613,10 @@ def save_results_1d(all_results: List[dict], filepath: Path) -> None:
         "J_out",
         "J_sim",
         "J_exp",
+        "law",
+        "ni_out_mode",
+        "K_S_0_Ni",
+        "E_S_Ni",
     ]
 
     with filepath.open("w", newline="") as f:
@@ -825,10 +915,10 @@ if __name__ == "__main__":
         },
     }
     cases = {
-        "normal_infinite": {"table": normal_infinite},
-        "normal_transparent": {"table": normal_transparent},
-        "swap_infinite": {"table": swap_infinite},
-        "swap_transparent": {"table": swap_transparent},
+        "normal_infinite": {"table": normal_infinite, "out_mode": "particle_flux_zero"},
+        "normal_transparent": {"table": normal_transparent, "out_mode": "sieverts"},
+        "swap_infinite": {"table": swap_infinite, "out_mode": "particle_flux_zero"},
+        "swap_transparent": {"table": swap_transparent, "out_mode": "sieverts"},
     }
 
     # Arrhenius permeability per case+run
@@ -898,7 +988,7 @@ if __name__ == "__main__":
             print(
                 f"{r['case']:>18s} | T={r['T_C']:5.1f} °C | {r['run']:>5s} | "
                 f"phi0={phi0:.3e} | E={E:.3f} eV | law={r['law']} | "
-                f"P(T)={P_T:.3e} | "
+                f"P(T)={P_T:.3e} | Ni_mode={r['ni_out_mode']} | "
                 f"J_sim={r['J_sim']:.3e} | J_exp={r['J_exp']:.3e}"
             )
 

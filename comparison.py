@@ -39,6 +39,78 @@ PermeabilityByCaseRun = Dict[str, Dict[str, htm.Permeability]]
 PermeabilityMap = Dict[str, Dict[float, Dict[str, htm.Permeability]]]
 
 
+# ------------------------------ Ni update by outside BC ------------------------------
+def kJmol_to_eV(E_kJmol: float) -> float:
+    # 1 eV per molecule = 96.485332123... kJ/mol
+    return float(E_kJmol) / 96.485332123
+
+
+NA = 6.02214076e23
+CONVERT_MOL_TO_PARTICLE = True
+
+P0_COATED_INPUT = 5.1961839671e-08  # "no flux bc" / ideal coating
+EP_COATED_KJMOL = 45.501620
+
+P0_UNCOATED_INPUT = 4.5163359858e-07  # "no coating bc"
+EP_UNCOATED_KJMOL = 57.591963
+
+
+def _to_particle_P0(P0_in: float) -> float:
+    return float(P0_in) * NA if CONVERT_MOL_TO_PARTICLE else float(P0_in)
+
+
+NI_PERM_BY_OUTBC = {
+    "particle_flux_zero": dict(
+        P0=_to_particle_P0(P0_COATED_INPUT), EP_kJmol=EP_COATED_KJMOL
+    ),
+    "sieverts": dict(P0=_to_particle_P0(P0_UNCOATED_INPUT), EP_kJmol=EP_UNCOATED_KJMOL),
+}
+
+
+def make_ni_solubility_from_perm(
+    D_nickel: htm.Diffusivity, P0_particle: float, EP_kJmol: float
+):
+    """
+    Build a Ni solubility object consistent with:
+      - Ni diffusivity D_nickel (kept as-is)
+      - Ni permeability (Sieverts law) given by (P0, EP)
+    using S(T) = P(T) / D(T).
+    """
+    perm_ni = htm.Permeability(
+        pre_exp=float(P0_particle),
+        act_energy=kJmol_to_eV(float(EP_kJmol)),
+        law="sievert",
+    )
+
+    K_S_ni = htm.Solubility(
+        S_0=perm_ni.pre_exp / D_nickel.pre_exp,
+        E_S=perm_ni.act_energy - D_nickel.act_energy,
+        law="sievert",
+    )
+    return K_S_ni
+
+
+def pick_ni_solubility_for_outbc(
+    out_bc: dict, D_nickel: htm.Diffusivity
+) -> htm.Solubility:
+    t = (out_bc or {}).get("type", "particle_flux_zero")
+    t = str(t).lower()
+    if t not in NI_PERM_BY_OUTBC:
+        t = "particle_flux_zero"
+    prm = NI_PERM_BY_OUTBC[t]
+    return make_ni_solubility_from_perm(D_nickel, prm["P0"], prm["EP_kJmol"])
+
+
+def outbc_from_outmode(out_mode: str, P_gb_default: float = 1e-30) -> dict:
+    out_mode = (out_mode or "").lower()
+    if out_mode == "sieverts":
+        return {"type": "sieverts", "pressure": P_gb_default}
+    elif out_mode == "particle_flux_zero":
+        return {"type": "particle_flux_zero"}
+    else:
+        return {"type": "particle_flux_zero"}
+
+
 # ------------------------------ Utilities ------------------------------
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
@@ -572,18 +644,27 @@ def run_all_cases_with_custom_permeabilities(
       - Arrhenius per case+run (per_case_run_perm), or
       - baseline permability_by_case_name otherwise.
 
+    Ni logic:
+      - keep D_nickel fixed
+      - choose Ni permeability by outside BC type (from case out_mode)
+      - overwrite Ni solubility via S(T)=P(T)/D(T)
+
     Returns flat list of dicts with sim vs exp flux and additional
     physical percentage metrics:
 
       - pct_sidewall_leak_out  : inlet sidewall / inlet  [%]
       - pct_sidewall_comp_out  : outlet sidewall / outlet [%]
-      - pct_liq_mem_diff         : liquid-membrane difference / outlet [%]
+      - pct_liq_mem_diff       : liquid-membrane difference / outlet [%]
     """
     all_results: List[dict] = []
 
     for case_name, case_cfg in cases.items():
         table = case_cfg["table"]
         out_mode = case_cfg.get("out_mode", "particle_flux_zero")
+
+        # --------- Ni chosen from outside BC mode (same logic as your calibration code)
+        out_bc_rep = outbc_from_outmode(out_mode)
+        K_S_nickel_case = pick_ni_solubility_for_outbc(out_bc_rep, D_nickel)
 
         for Tc, entry in table.items():
             Tk = T2K[Tc]
@@ -616,7 +697,7 @@ def run_all_cases_with_custom_permeabilities(
                     D_flibe=D_flibe,
                     D_nickel=D_nickel,
                     permeability_flibe=perm_flibe,
-                    K_S_nickel=K_S_nickel,
+                    K_S_nickel=K_S_nickel_case,
                     out_bc=out_bc,
                     y_ft=y_ft,
                 )
@@ -630,38 +711,30 @@ def run_all_cases_with_custom_permeabilities(
                 # magnitudes
                 J_in = abs(float(res["total_in"]))  # inlet
                 J_out = abs(float(res["total_out"]))  # outlet
-                # J_top_sidewall = abs(vals_dict.get("top_sidewall_Ni", 0.0))
-                # J_bottom_sidewall = abs(vals_dict.get("bottom_sidewall_Ni", 0.0))
                 J_liquid = abs(vals_dict.get("liquid_surface", 0.0))
                 J_membrane = abs(vals_dict.get("mid_membrane_Ni", 0.0))
 
                 # defaults
                 pct_sidewall_leak_out = float("nan")  # upstream sidewall / inlet
                 pct_sidewall_comp_out = float("nan")  # downstream sidewall / outlet
-                pct_liq_mem_diff = float("nan")  # still normalized by outlet
+                pct_liq_mem_diff = float("nan")  # normalized by outlet
 
                 # ---- upstream sidewall leakage / inlet ----
                 if J_in > 0.0:
                     if case_name.startswith("normal"):
-                        # inlet at bottom → upstream sidewall = bottom sidewall
                         pct_sidewall_leak_out = 100.0 * (1 - J_membrane / J_in)
                     elif case_name.startswith("swap"):
-                        # inlet at top → upstream sidewall = top sidewall
                         pct_sidewall_leak_out = 100.0 * (1 - J_liquid / J_in)
 
                 # ---- downstream sidewall leakage / outlet ----
                 if J_out > 0.0:
                     if case_name.startswith("normal"):
-                        # outlet at top → downstream sidewall = top sidewall
                         pct_sidewall_comp_out = 100.0 * (1 - J_liquid / J_out)
                     elif case_name.startswith("swap"):
-                        # outlet at bottom → downstream sidewall = bottom sidewall
                         pct_sidewall_comp_out = 100.0 * (1 - J_membrane / J_out)
 
-                    # liquid–membrane normalized by OUTLET
                     pct_liq_mem_diff = 100.0 * (J_liquid - J_membrane) / J_out
 
-                # store new metrics
                 all_results.append(
                     {
                         "case": case_name,
@@ -945,11 +1018,16 @@ def plot_breakdowns_all_cases(
 
         [J_exp, total_in, total_out, glovebox, individual surfaces...]
 
-    with permeability chosen per (case, T, run) via get_permeability_for_run().
+    with permeability chosen per (case, T, run) via get_permeability_for_run(),
+    and Ni solubility updated from outside-BC mode.
     """
     for case_name, case_cfg in cases.items():
         table = case_cfg.get("table", {})
         out_mode = case_cfg.get("out_mode", "particle_flux_zero")
+
+        # --------- Ni chosen from outside BC mode (same logic as your calibration code)
+        out_bc_rep = outbc_from_outmode(out_mode)
+        K_S_nickel_case = pick_ni_solubility_for_outbc(out_bc_rep, D_nickel)
 
         for Tc in sorted(table.keys()):
             Tk = T2K[Tc]
@@ -985,7 +1063,7 @@ def plot_breakdowns_all_cases(
                     D_flibe=D_flibe,
                     D_nickel=D_nickel,
                     permeability_flibe=perm_flibe,
-                    K_S_nickel=K_S_nickel,
+                    K_S_nickel=K_S_nickel_case,
                     out_bc=out_bc,
                     y_ft=y_ft,
                 )
@@ -1090,29 +1168,23 @@ def plot_jsim_vs_jexp_grouped_by_type_and_run(
         return
 
     # group: (type, run) -> config -> list of rows
-    # type: "normal" or "swap"
     grouped: Dict[tuple, Dict[str, List[dict]]] = {}
 
     for r in all_results:
-        case_name = r["case"]  # e.g. "normal_infinite"
-        run_name = r["run"]  # "Run 1" / "Run 2"
-        typ, cfg = _split_case_group(case_name)  # typ="normal", cfg="infinite"
+        case_name = r["case"]
+        run_name = r["run"]
+        typ, cfg = _split_case_group(case_name)
         key = (typ, run_name)
         grouped.setdefault(key, {}).setdefault(cfg, []).append(r)
 
     for (typ, run_name), cfg_dict in grouped.items():
-        # Temps present in any config
         temps = sorted({row["T_C"] for rows in cfg_dict.values() for row in rows})
         temps = np.array(temps, dtype=float)
 
-        # J_exp and error (identical for infinite/transparent)
-        # Use the *_infinite case for error lookup.
         case_for_error = f"{typ}_infinite"
         J_exp = np.zeros_like(temps)
         J_err = np.zeros_like(temps)
 
-        # Take J_exp from any config (they all share exp data)
-        # Map temp -> J_exp
         temp_to_Jexp: Dict[float, float] = {}
         for rows in cfg_dict.values():
             for row in rows:
@@ -1123,26 +1195,22 @@ def plot_jsim_vs_jexp_grouped_by_type_and_run(
             err_val = get_exp_error(case_for_error, Tc, run_name)
             J_err[i] = 0.0 if err_val is None else float(err_val)
 
-        # J_sim for each cfg, aligned by temperature
-        cfg_names = sorted(cfg_dict.keys())  # e.g. ["infinite", "transparent"]
+        cfg_names = sorted(cfg_dict.keys())
         J_sim_by_cfg: Dict[str, np.ndarray] = {}
 
         for cfg in cfg_names:
             rows = cfg_dict[cfg]
-            # map temp -> J_sim for this cfg
             t2sim = {row["T_C"]: row["J_sim"] for row in rows}
             J_sim_by_cfg[cfg] = np.array(
                 [float(t2sim[Tc]) for Tc in temps], dtype=float
             )
 
-        # --- Plotting ---
         fig, ax = plt.subplots(figsize=(8, 4))
 
         x = np.arange(len(temps), dtype=float)
         n_cfg = len(cfg_names)
         bar_width = 0.8 / max(n_cfg, 1)
 
-        # bars for each config
         for j, cfg in enumerate(cfg_names):
             offset = (j - (n_cfg - 1) / 2.0) * bar_width
             ax.bar(
@@ -1153,7 +1221,6 @@ def plot_jsim_vs_jexp_grouped_by_type_and_run(
                 label=f"J_sim ({cfg})",
             )
 
-        # J_exp with error bars (one per temperature)
         ax.errorbar(
             x,
             J_exp,
@@ -1193,28 +1260,23 @@ def plot_jsim_vs_jexp_two_plots(
         2) 'swap'     (swap_infinite   + swap_transparent,   Run 1 & Run 2)
 
     For each type:
-      - For each temperature, we build two groups on the x-axis:
+      - For each temperature, build two groups on the x-axis:
           left group = Run 1, right group = Run 2.
-      - In each group we plot two bars: infinite + transparent.
-        Infinite and transparent share the same color (per run), but
-        use different hatches.
-      - J_exp for Run 1 and Run 2 are points with error bars, centred
-        in each group's middle, with different markers/colors.
+      - In each group plot two bars: infinite + transparent.
+      - J_exp for Run 1 and Run 2 are points with error bars.
     """
     if not all_results:
         if _RANK0:
             print("No results to plot (all_results is empty).")
         return
 
-    # Group all rows by type ('normal' / 'swap')
     rows_by_typ: Dict[str, List[dict]] = {}
     for r in all_results:
-        typ, cfg = _split_case_group(r["case"])  # cfg: 'infinite' / 'transparent'
-        r = dict(r)  # shallow copy so we can attach cfg
+        typ, cfg = _split_case_group(r["case"])
+        r = dict(r)
         r["_cfg"] = cfg
         rows_by_typ.setdefault(typ, []).append(r)
 
-    # Style maps
     marker_map = {
         "Run 1": "o",
         "Run 2": "s",
@@ -1222,19 +1284,15 @@ def plot_jsim_vs_jexp_two_plots(
     }
 
     for typ, rows in rows_by_typ.items():
-        # Temperatures present for this typ
         temps = sorted({row["T_C"] for row in rows})
         temps = np.array(temps, dtype=float)
 
-        # Runs and configs present
         run_names = sorted({row["run"] for row in rows})
-        cfg_names = sorted({row["_cfg"] for row in rows})  # 'infinite', 'transparent'
+        cfg_names = sorted({row["_cfg"] for row in rows})
 
-        # --------- J_exp and error (per run, no config distinction) ----------
         J_exp_by_run: Dict[str, np.ndarray] = {}
         J_err_by_run: Dict[str, np.ndarray] = {}
 
-        # experimental error table uses '*_infinite'
         case_for_error = f"{typ}_infinite"
 
         for run in run_names:
@@ -1256,7 +1314,6 @@ def plot_jsim_vs_jexp_two_plots(
             J_exp_by_run[run] = np.array(j_vals, dtype=float)
             J_err_by_run[run] = np.array(err_vals, dtype=float)
 
-        # --------- J_sim for each (config, run) ----------
         J_sim_by_cfg_run: Dict[tuple, np.ndarray] = {}
         for cfg in cfg_names:
             for run in run_names:
@@ -1277,13 +1334,11 @@ def plot_jsim_vs_jexp_two_plots(
                     vals.append(np.nan if row is None else float(row["J_sim"]))
                 J_sim_by_cfg_run[(cfg, run)] = np.array(vals, dtype=float)
 
-        # ---------- Plot ----------
         fig, ax = plt.subplots(figsize=(8, 4))
         x = np.arange(len(temps), dtype=float)
 
-        # Geometry: two groups (one per run) per temperature
-        base_group_width = 0.8  # total span per temperature
-        sub_width = base_group_width / 4.0  # width of each individual bar
+        base_group_width = 0.8
+        sub_width = base_group_width / 4.0
 
         n_runs = len(run_names)
         n_cfg = len(cfg_names)
@@ -1291,13 +1346,10 @@ def plot_jsim_vs_jexp_two_plots(
         used_bar_labels = set()
         used_exp_labels = set()
 
-        # Bars for each (run group, cfg)
         for run_idx, run in enumerate(run_names):
-            # Center of this run's group within each temperature
             if n_runs == 1:
                 run_center_shift = 0.0
             else:
-                # two groups: left (Run 1) and right (Run 2)
                 run_center_shift = (run_idx - (n_runs - 1) / 2.0) * (2.0 * sub_width)
 
             for cfg_idx, cfg in enumerate(cfg_names):
@@ -1306,7 +1358,6 @@ def plot_jsim_vs_jexp_two_plots(
                 if y is None:
                     continue
 
-                # within-group shift: left (infinite) / right (transparent)
                 if n_cfg == 1:
                     cfg_shift = 0.0
                 else:
@@ -1350,7 +1401,6 @@ def plot_jsim_vs_jexp_two_plots(
                     label=label,
                 )
 
-        # J_exp for each run, as points with error bars in the centre of each group
         for run_idx, run in enumerate(run_names):
             if n_runs == 1:
                 run_center_shift = 0.0
@@ -1408,7 +1458,6 @@ def _plot_percentage_by_type_case_run(
 ):
     from collections import defaultdict
 
-    # typ -> (case, run) -> list of (T, value)
     by_type_case_run: Dict[str, Dict[tuple, List[tuple]]] = {
         "normal": defaultdict(list),
         "swap": defaultdict(list),
@@ -1486,11 +1535,8 @@ def _plot_percentage_by_type_case_run(
 def plot_inlet_leakage_sidewall(all_results: List[dict]):
     """
     Upstream sidewall leakage, normalized by inlet flux:
-
       - normal: bottom sidewall / inlet
       - swap:   top sidewall    / inlet
-
-    One figure for NORMAL, one for SWAP.
     """
     outdir_root = Path("exports") / "figs" / "inlet_leakage_sidewall"
     _plot_percentage_by_type_case_run(
@@ -1507,11 +1553,8 @@ def plot_inlet_leakage_sidewall(all_results: List[dict]):
 def plot_outlet_compensation_sidewall(all_results: List[dict]):
     """
     Downstream sidewall leakage, normalized by outlet flux:
-
       - normal: top sidewall    / outlet
       - swap:   bottom sidewall / outlet
-
-    One figure for NORMAL, one for SWAP.
     """
     outdir_root = Path("exports") / "figs" / "outlet_comp_sidewall"
     _plot_percentage_by_type_case_run(
@@ -1528,11 +1571,8 @@ def plot_outlet_compensation_sidewall(all_results: List[dict]):
 def plot_liquid_membrane_difference(all_results: List[dict]):
     """
     Liquid vs membrane difference, normalized by membrane flux:
-
       - normal: (membrane - liquid)/membrane [%]
       - swap:   (liquid   - membrane)/membrane [%]
-
-    One figure for NORMAL, one for SWAP.
     """
     outdir_root = Path("exports") / "figs" / "liquid_membrane_diff"
     _plot_percentage_by_type_case_run(
@@ -1721,7 +1761,7 @@ if __name__ == "__main__":
         },
     }
 
-    # swap_transparent uses Sieverts out BC (so it needs P_gb), but you want to force all to 1e-30
+    # swap_transparent uses Sieverts out BC
     swap_transparent = {
         500.0: {
             "runs": {
@@ -1896,14 +1936,12 @@ if __name__ == "__main__":
             writer.writerow(["case", "T_C", "run", "phi0", "E_eV", "J_sim", "J_exp"])
 
             for r in all_results:
-                # Keep the original console print
                 print(
                     f"{r['case']:>18s} | T={r['T_C']:5.1f} °C | {r['run']:>5s} | "
                     f"phi0={r['phi0']:.3e} | E={r['E']:.3f} eV | "
                     f"J_sim={2 * r['J_sim']:.3e} | J_exp={r['J_exp']:.3e}"
                 )
 
-                # Write one row into the CSV file
                 writer.writerow(
                     [
                         r["case"],
