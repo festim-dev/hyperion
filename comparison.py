@@ -482,27 +482,39 @@ def permability_by_case_name(
         if case_name == "swap_infinite":
             if run_name == "Run 1":
                 return htm.Permeability(
-                    pre_exp=437941789378.1358,
-                    act_energy=0.1621177114636059,
+                    pre_exp=131720234232.97202,
+                    act_energy=0.14259800636177897,
+                    law="henry",
+                )
+            elif run_name == "Run 2":
+                return htm.Permeability(
+                    pre_exp=363415748298.5359,
+                    act_energy=0.19672903147640755,
                     law="henry",
                 )
             else:
                 return htm.Permeability(
-                    pre_exp=865326598314.4625,
-                    act_energy=0.19467840373934114,
+                    pre_exp=918010284564.2983,
+                    act_energy=0.36689018612723834,
                     law="henry",
                 )
         elif case_name == "swap_transparent":
             if run_name == "Run 1":
                 return htm.Permeability(
-                    pre_exp=1670438225847.1777,
-                    act_energy=0.23510226611596444,
+                    pre_exp=18812216660963.566,
+                    act_energy=0.4309849518078271,
+                    law="henry",
+                )
+            elif run_name == "Run 2":
+                return htm.Permeability(
+                    pre_exp=19858409294360.746,
+                    act_energy=0.4235587220438897,
                     law="henry",
                 )
             else:
                 return htm.Permeability(
-                    pre_exp=2231942286596.255,
-                    act_energy=0.2397094892704862,
+                    pre_exp=139688360493517.1,
+                    act_energy=0.6133713869157279,
                     law="henry",
                 )
     raise ValueError(f"Unknown case name for permeability: {case_name}")
@@ -692,18 +704,18 @@ exp_error_data = {
         700.0: {"runs": {"Run 1": 9.65e13, "Run 2": 9.34e13}},
     },
     "swap_infinite": {
-        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
+        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13, "Run 3": 4.90e13}},
         550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
-        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
+        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14, "Run 3": 1.01e14}},
         650.0: {"runs": {"Run 2": 2.26e14}},
-        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
+        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14, "Run 3": 1.52e14}},
     },
     "swap_transparent": {
-        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
+        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13, "Run 3": 4.90e13}},
         550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
-        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
+        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14, "Run 3": 1.01e14}},
         650.0: {"runs": {"Run 2": 2.26e14}},
-        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
+        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14, "Run 3": 1.52e14}},
     },
 }
 
@@ -764,7 +776,7 @@ def plot_jsim_vs_jexp_with_errorbars(
         # sort by temperature
         rows.sort(key=lambda r: r["T_C"])
         T = np.array([r["T_C"] for r in rows], dtype=float)  # °C
-        J_sim = np.array([r["J_sim"] for r in rows], dtype=float)
+        J_sim = 2 * np.array([r["J_sim"] for r in rows], dtype=float)
         J_exp = np.array([r["J_exp"] for r in rows], dtype=float)
 
         # experimental error from your table
@@ -1311,6 +1323,7 @@ def plot_jsim_vs_jexp_two_plots(
                 run_style = {
                     "Run 1": {"edgecolor": "C0"},
                     "Run 2": {"edgecolor": "C1"},
+                    "Run 3": {"edgecolor": "C2"},
                 }
 
                 config_style = {
@@ -1324,7 +1337,7 @@ def plot_jsim_vs_jexp_two_plots(
                     },
                 }
 
-                style_run = run_style[run]
+                style_run = run_style.get(run, {"edgecolor": "C3"})
                 style_conf = config_style[cfg]
                 ax.bar(
                     x + offset,
@@ -1675,12 +1688,12 @@ if __name__ == "__main__":
             }
         },
     }
-
     swap_infinite = {
         500.0: {
             "runs": {
                 "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
                 "Run 2": {"P_up": 1.31e5, "P_down": 1.99e1, "J_exp": 4.34e15},
+                "Run 3": {"P_up": 1.31e5, "P_down": 8.66, "J_exp": 1.91e15},
             }
         },
         550.0: {
@@ -1693,6 +1706,7 @@ if __name__ == "__main__":
             "runs": {
                 "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
+                "Run 3": {"P_up": 1.33e5, "P_down": 2.10e1, "J_exp": 4.50e15},
             }
         },
         650.0: {
@@ -1702,23 +1716,32 @@ if __name__ == "__main__":
             "runs": {
                 "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.78e1, "J_exp": 1.04e16},
+                "Run 3": {"P_up": 1.31e5, "P_down": 3.23e1, "J_exp": 7.12e15},
             }
         },
     }
+
+    # swap_transparent uses Sieverts out BC (so it needs P_gb), but you want to force all to 1e-30
     swap_transparent = {
         500.0: {
             "runs": {
                 "Run 1": {
                     "P_up": 1.31e5,
                     "P_down": 1.77e1,
-                    "P_gb": 7.0,
+                    "P_gb": 1e-30,
                     "J_exp": 3.89e15,
                 },
                 "Run 2": {
                     "P_up": 1.31e5,
-                    "P_down": 3.89e1,
-                    "P_gb": 7.0,
+                    "P_down": 1.99e1,
+                    "P_gb": 1e-30,
                     "J_exp": 4.34e15,
+                },
+                "Run 3": {
+                    "P_up": 1.31e5,
+                    "P_down": 8.66,
+                    "P_gb": 1e-30,
+                    "J_exp": 1.91e15,
                 },
             }
         },
@@ -1727,13 +1750,13 @@ if __name__ == "__main__":
                 "Run 1": {
                     "P_up": 1.31e5,
                     "P_down": 3.21e1,
-                    "P_gb": 1.0e1,
+                    "P_gb": 1e-30,
                     "J_exp": 7.20e15,
                 },
                 "Run 2": {
                     "P_up": 1.31e5,
                     "P_down": 3.89e1,
-                    "P_gb": 1.0e1,
+                    "P_gb": 1e-30,
                     "J_exp": 8.58e15,
                 },
             }
@@ -1743,14 +1766,20 @@ if __name__ == "__main__":
                 "Run 1": {
                     "P_up": 1.33e5,
                     "P_down": 3.57e1,
-                    "P_gb": 1.2e1,
+                    "P_gb": 1e-30,
                     "J_exp": 7.64e15,
                 },
                 "Run 2": {
                     "P_up": 1.32e5,
                     "P_down": 4.62e1,
-                    "P_gb": 1.2e1,
+                    "P_gb": 1e-30,
                     "J_exp": 1.01e16,
+                },
+                "Run 3": {
+                    "P_up": 1.33e5,
+                    "P_down": 2.10e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 4.50e15,
                 },
             }
         },
@@ -1759,7 +1788,7 @@ if __name__ == "__main__":
                 "Run 2": {
                     "P_up": 1.32e5,
                     "P_down": 5.02e1,
-                    "P_gb": 1.5e1,
+                    "P_gb": 1e-30,
                     "J_exp": 1.10e16,
                 },
             }
@@ -1769,14 +1798,20 @@ if __name__ == "__main__":
                 "Run 1": {
                     "P_up": 1.32e5,
                     "P_down": 4.07e1,
-                    "P_gb": 2.2e1,
+                    "P_gb": 1e-30,
                     "J_exp": 9.04e15,
                 },
                 "Run 2": {
                     "P_up": 1.32e5,
                     "P_down": 4.78e1,
-                    "P_gb": 2.2e1,
+                    "P_gb": 1e-30,
                     "J_exp": 1.04e16,
+                },
+                "Run 3": {
+                    "P_up": 1.31e5,
+                    "P_down": 3.230e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 7.12e15,
                 },
             }
         },
@@ -1809,18 +1844,24 @@ if __name__ == "__main__":
         },
         "swap_infinite": {
             "Run 1": htm.Permeability(
-                pre_exp=437941789378.1358, act_energy=0.1621177114636059, law="henry"
+                pre_exp=131720234232.97202, act_energy=0.14259800636177897, law="henry"
             ),
             "Run 2": htm.Permeability(
-                pre_exp=865326598314.4625, act_energy=0.19467840373934114, law="henry"
+                pre_exp=363415748298.5359, act_energy=0.19672903147640755, law="henry"
+            ),
+            "Run 3": htm.Permeability(
+                pre_exp=918010284564.2983, act_energy=0.36689018612723834, law="henry"
             ),
         },
         "swap_transparent": {
             "Run 1": htm.Permeability(
-                pre_exp=1670438225847.1777, act_energy=0.23510226611596444, law="henry"
+                pre_exp=18812216660963.566, act_energy=0.4309849518078271, law="henry"
             ),
             "Run 2": htm.Permeability(
-                pre_exp=2231942286596.255, act_energy=0.2397094892704862, law="henry"
+                pre_exp=19858409294360.746, act_energy=0.4235587220438897, law="henry"
+            ),
+            "Run 3": htm.Permeability(
+                pre_exp=139688360493517.1, act_energy=0.6133713869157279, law="henry"
             ),
         },
     }
@@ -1859,7 +1900,7 @@ if __name__ == "__main__":
                 print(
                     f"{r['case']:>18s} | T={r['T_C']:5.1f} °C | {r['run']:>5s} | "
                     f"phi0={r['phi0']:.3e} | E={r['E']:.3f} eV | "
-                    f"J_sim={r['J_sim']:.3e} | J_exp={r['J_exp']:.3e}"
+                    f"J_sim={2 * r['J_sim']:.3e} | J_exp={r['J_exp']:.3e}"
                 )
 
                 # Write one row into the CSV file
@@ -1870,7 +1911,7 @@ if __name__ == "__main__":
                         r["run"],
                         r["phi0"],
                         r["E"],
-                        r["J_sim"],
+                        r["J_sim"] * 2,
                         r["J_exp"],
                     ]
                 )
