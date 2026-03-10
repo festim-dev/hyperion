@@ -210,6 +210,25 @@ manual_mats = [
     ("Robertson", make_materials(mol_to_particles(3.22e-07), kj_mol_to_ev(54.6))),
 ]
 
+# manual_mats = [
+#     (
+#         "Run1, ideal coating",
+#         make_materials(mol_to_particles(5.196e-8), kj_mol_to_ev(45.502)),
+#     ),
+#     (
+#         "Run1, no coating",
+#         make_materials(mol_to_particles(4.516e-07), kj_mol_to_ev(57.592)),
+#     ),
+#     # (
+#     #     "Run2, ideal coating",
+#     #     make_materials(mol_to_particles(4.831e-08), kj_mol_to_ev(45.157)),
+#     # ),
+#     # (
+#     #     "Run2, no coating",
+#     #     make_materials(mol_to_particles(4.687e-07), kj_mol_to_ev(57.913)),
+#     # ),
+# ]
+
 for name, mat in manual_mats:
     for mode in modes:
         flux_list = []
@@ -228,17 +247,84 @@ for name, mat in manual_mats:
         results[(name, mode)] = np.array(flux_list, dtype=float)
 
 
-def bar_run(run_name: str, idx: np.ndarray, fname: str):
+# def bar_run(run_name: str, idx: np.ndarray, fname: str):
+#     temps = T_C[idx]
+#     exp_y = exp_flux[idx]
+
+#     x = np.arange(len(temps))
+
+#     fig, ax = plt.subplots(figsize=(9, 5))
+
+#     authors = [name for name, _ in manual_mats]
+#     cmap = plt.get_cmap("tab10")
+#     author_colors = {author: cmap(i) for i, author in enumerate(authors)}
+
+#     sim_series = []
+#     for name, _mat in manual_mats:
+#         for mode in modes:
+#             y = results[(name, mode)][idx]
+#             sim_series.append((name, mode, y))
+
+#     n_series = len(sim_series)
+#     group_width = 0.8
+#     bar_w = group_width / n_series
+#     offsets = (np.arange(n_series) - (n_series - 1) / 2) * bar_w
+
+#     for i, (name, mode, y) in enumerate(sim_series):
+#         filled = mode == "flux0"
+
+#         ax.bar(
+#             x + offsets[i],
+#             y,
+#             width=bar_w,
+#             color=author_colors[name] if filled else "none",
+#             edgecolor=author_colors[name],
+#             linewidth=1.5,
+#             label=f"{name} | {'ideal coating' if filled else 'no coating'}",
+#             zorder=2,
+#         )
+
+#     ax.scatter(
+#         x,
+#         exp_y,
+#         color="red",
+#         s=80,
+#         marker="o",
+#         label="Experiment",
+#         zorder=5,
+#     )
+
+#     ax.set_xticks(x)
+#     ax.set_xticklabels([f"{int(t)}°C" for t in temps])
+
+#     ax.set_xlabel("Temperature")
+#     ax.set_ylabel("Downstream flux [H/s]")
+#     # ax.set_title(f"{run_name}: Experimental vs Simulation")
+
+#     ax.grid(True, axis="y", alpha=0.3)
+
+#     ax.legend(ncol=2, fontsize=9)
+
+#     fig.tight_layout()
+
+#     fpath = os.path.join(OUTDIR, fname)
+#     fig.savefig(fpath, dpi=300)
+#     plt.close(fig)
+
+#     if RANK == 0:
+#         print(f"Saved: {fpath}")
+
+
+# if RANK == 0:
+#     bar_run("Run 1", idx1, "barchart_run1_exp_vs_sim.svg")
+#     bar_run("Run 2", idx2, "barchart_run2_exp_vs_sim.svg")
+
+
+def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict):
     temps = T_C[idx]
     exp_y = exp_flux[idx]
 
     x = np.arange(len(temps))
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-
-    authors = [name for name, _ in manual_mats]
-    cmap = plt.get_cmap("tab10")
-    author_colors = {author: cmap(i) for i, author in enumerate(authors)}
 
     sim_series = []
     for name, _mat in manual_mats:
@@ -261,7 +347,7 @@ def bar_run(run_name: str, idx: np.ndarray, fname: str):
             color=author_colors[name] if filled else "none",
             edgecolor=author_colors[name],
             linewidth=1.5,
-            label=f"{name} | {'flux=0' if filled else 'C=0'}",
+            label=f"{name} | {'ideal coating' if filled else 'no coating'}",
             zorder=2,
         )
 
@@ -276,20 +362,102 @@ def bar_run(run_name: str, idx: np.ndarray, fname: str):
     )
 
     ax.set_xticks(x)
-    ax.set_xticklabels([f"{int(t)}°C" for t in temps])
-
-    ax.set_xlabel("Temperature")
-    ax.set_ylabel("Downstream flux [H/s]")
-    ax.set_title(f"{run_name}: Experimental vs Simulation")
-
+    ax.set_xticklabels([f"{int(t)}°C" for t in temps], fontsize=15)
+    # ax.set_xlabel("Temperature")
+    # ax.set_title(run_name)
     ax.grid(True, axis="y", alpha=0.3)
 
-    ax.legend(ncol=2, fontsize=9)
 
-    fig.tight_layout()
+def bar_panel_runs(fname="barchart_runs_panel_exp_vs_sim.svg"):
+    authors = [name for name, _ in manual_mats]
+    cmap = plt.get_cmap("tab10")
+    author_colors = {author: cmap(i) for i, author in enumerate(authors)}
+
+    fig, axes = plt.subplots(2, 1, figsize=(7.2, 8.2), sharex=True, sharey=True)
+    # fig.text(0.5, 0.9, "(a)", ha="center", va="bottom", fontsize=15, fontweight="bold")
+    # fig.text(0.5, 0.5, "(b)", ha="center", va="bottom", fontsize=15, fontweight="bold")
+
+    fig.supylabel("Downstream flux [H/s]", fontsize=15)
+    axes[1].set_xlabel("Temperature", fontsize=15)
+
+    _plot_one_run_on_ax(axes[0], "Run 1", idx1, author_colors)
+    _plot_one_run_on_ax(axes[1], "Run 2", idx2, author_colors)
+
+    # axes[0].set_xlabel("")  # remove top x label
+    # axes[1].set_xlabel("Temperature", fontsize=15)
+
+    # axes[0].set_ylabel("Downstream flux [H/s]", fontsize=15)
+
+    # build unique legend handles/labels from both axes
+    handles = []
+    labels = []
+    for ax in axes:
+        ax.tick_params(axis="both", labelsize=15)
+        ax.yaxis.get_offset_text().set_fontsize(15)
+        h, l = ax.get_legend_handles_labels()
+        for hh, ll in zip(h, l):
+            if ll not in labels:
+                handles.append(hh)
+                labels.append(ll)
+
+    axes[0].text(
+        0.5,
+        1.01,
+        "(a)",
+        transform=axes[0].transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=15,
+        fontweight="bold",
+    )
+
+    axes[1].text(
+        0.5,
+        1.01,
+        "(b)",
+        transform=axes[1].transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=15,
+        fontweight="bold",
+    )
+
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.985),
+        ncol=3,
+        fontsize=12,
+        frameon=True,
+        columnspacing=1.6,
+        handletextpad=0.7,
+        borderpad=0.5,
+    )
+    fig.subplots_adjust(left=0.12, right=0.985, top=0.84, bottom=0.09, hspace=0.12)
+
+    # axes[0].text(
+    #     0.02,
+    #     0.95,
+    #     "(a)",
+    #     transform=axes[0].transAxes,
+    #     fontsize=15,
+    #     fontweight="bold",
+    #     va="center_baseline",
+    # )
+
+    # axes[1].text(
+    #     0.02,
+    #     0.95,
+    #     "(b)",
+    #     transform=axes[1].transAxes,
+    #     fontsize=15,
+    #     fontweight="bold",
+    #     va="center_baseline",
+    # )
 
     fpath = os.path.join(OUTDIR, fname)
-    fig.savefig(fpath, dpi=300)
+    fig.savefig(fpath, dpi=300, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
 
     if RANK == 0:
@@ -297,5 +465,4 @@ def bar_run(run_name: str, idx: np.ndarray, fname: str):
 
 
 if RANK == 0:
-    bar_run("Run 1", idx1, "barchart_run1_exp_vs_sim.png")
-    bar_run("Run 2", idx2, "barchart_run2_exp_vs_sim.png")
+    bar_panel_runs("barchart_run1_run2_panel_exp_vs_sim.svg")
