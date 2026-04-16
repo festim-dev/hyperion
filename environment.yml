@@ -27,3 +27,4 @@ dependencies:
   - nest-asyncio2
   - pip:
       - h_transport_materials
+      - morethemes
