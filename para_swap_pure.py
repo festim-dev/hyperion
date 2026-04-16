@@ -46,6 +46,7 @@ from exp_data import (
     swap_flux_err,
     load_ni_permeability,
     D_nickel,
+    D_flibe,
 )
 
 try:
@@ -887,8 +888,6 @@ def make_dual_overlay_lnphi(
 
 if __name__ == "__main__":
     set_log_level(LogLevel.WARNING)
-
-    D_flibe = htm.Diffusivity(D_0=2.5e-7, E_D=0.24)
 
     T2K = {Tc: Tc + 273.15 for Tc in [500.0, 550.0, 600.0, 650.0, 700.0]}
     Y_FT_BY_TEMP_C = {
