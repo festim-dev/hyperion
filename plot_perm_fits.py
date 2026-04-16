@@ -1,43 +1,61 @@
+"""
+Arrhenius plot of FLiBe permeability: fitted curves from inversion output
+overlaid with literature data points.
+
+Reads from results/inverted_points.csv and results/fitted_params.csv,
+produced by invert_phi_flibe.py.
+"""
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-kB_eV = 8.617333262e-5
+import morethemes as mt
+
+mt.set_theme("lumen")
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+kB_eV = 8.617333262e-5  # Boltzmann constant [eV/K]
+KJ_MOL_TO_EV = 1.0 / 96.485
+N_A = 6.02214076e23
 
 
 def phi_arrhenius(T, phi0, E):
     return phi0 * np.exp(-E / (kB_eV * T))
 
 
-ROOT = Path(__file__).resolve().parent
+def mol_to_particles(x):
+    return x * N_A
 
-EXPORT_BASE = ROOT / "exports" / "figs" / "calibration_A" / "SWAP_bundle_pure"
+
+def kjmol_to_ev(x):
+    return x * KJ_MOL_TO_EV
+
+
+def ev_to_kjmol(x):
+    return x / KJ_MOL_TO_EV
+
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+
+ROOT = Path(__file__).resolve().parent
+RESULTS = ROOT / "results"
+OUTDIR = RESULTS
+OUTDIR.mkdir(parents=True, exist_ok=True)
+
+INV_CSV = RESULTS / "inverted_points.csv"
+FIT_CSV = RESULTS / "fitted_params.csv"
+
+# ── Case configuration ────────────────────────────────────────────────────────
 
 CASES = {
-    "swap_infinite": {
-        "label": "Ideal coating",
-        "dir": EXPORT_BASE / "swap_infinite_Ni_from_perm",
-    },
-    "swap_transparent": {
-        "label": "No coating",
-        "dir": EXPORT_BASE / "swap_transparent_Ni_from_perm",
-    },
+    "swap_infinite": {"label": "Ideal coating"},
+    "swap_transparent": {"label": "Uncoated"},
 }
 
-LABEL_OFFSET = {
-    ("swap_transparent", "Run 2"): (0.01, 1.25),
-    ("swap_transparent", "Run 3"): (0.01, 0.75),
-    ("swap_infinite", "Run 2"): (0.01, 0.80),
-    ("swap_infinite", "Run 3"): (0.01, 1.25),
-}
-
-LABEL_ROTATION = {
-    ("swap_transparent", "Run 2"): -7,
-    ("swap_transparent", "Run 3"): -10,
-    ("swap_infinite", "Run 2"): -4,
-    ("swap_infinite", "Run 3"): -6,
-}
+RUNS = ["Run 2", "Run 3"]
 
 RUN_LABEL = {
     "Run 2": "H",
@@ -59,101 +77,39 @@ CASE_SYMBOL = {
     "swap_transparent": "△",
 }
 
-RUNS = ["Run 2", "Run 3"]
+LABEL_OFFSET = {
+    ("swap_transparent", "Run 2"): (0.01, 1.25),
+    ("swap_transparent", "Run 3"): (0.01, 0.75),
+    ("swap_infinite", "Run 2"): (0.01, 0.80),
+    ("swap_infinite", "Run 3"): (0.01, 1.25),
+}
 
+LABEL_ROTATION = {
+    ("swap_transparent", "Run 2"): -7,
+    ("swap_transparent", "Run 3"): -10,
+    ("swap_infinite", "Run 2"): -4,
+    ("swap_infinite", "Run 3"): -6,
+}
 
-def angle_along_curve(ax, x, y, idx, k=8, max_angle=60):
-    n = len(x)
-    i0 = max(0, idx - k)
-    i1 = min(n - 1, idx + k)
-    if i1 == i0:
-        return 0.0
-
-    p0 = ax.transData.transform((x[i0], y[i0]))
-    p1 = ax.transData.transform((x[i1], y[i1]))
-    ang = np.degrees(np.arctan2(p1[1] - p0[1], p1[0] - p0[0]))
-
-    if ang > 90:
-        ang -= 180
-    if ang < -90:
-        ang += 180
-
-    return float(np.clip(ang, -max_angle, max_angle))
-
-
-OUT_DIR = ROOT / "plots"
-OUT_DIR.mkdir(exist_ok=True)
-
-KJ_MOL_TO_EV = 1.0 / 96.485
-N_A = 6.02214076e23
-K_B_EV_PER_K = 8.617333262145e-5
-
-
-def mol_to_particles(x):
-    return x * N_A
-
-
-def particles_to_mol(x):
-    return x / N_A
-
-
-def kjmol_to_ev(x):
-    return x * KJ_MOL_TO_EV
-
-
-def ev_to_kjmol(x):
-    return x / KJ_MOL_TO_EV
-
-
-# permeability_data_ni = [
-#     ("Lee", 4.52e-7, 55.3),
-#     ("Gorman & Nardella", 4.65e-7, 55.2),
-#     ("Ebisuzaki et al.", 4.05e-7, 55.1),  # 200 -420C
-#     ("Robertson", 3.22e-7, 54.6),
-#     ("Louthan et al.", 3.90e-7, 55.3),
-#     ("Yaminish et al.", 7.08e-7, 54.8),
-#     ("Masui et al.", 5.21e-7, 54.4),
-#     (
-#         "Altunoglu",
-#         3.35e-7,
-#         54.24,
-#     ),  # this is good, but it seems that only work in 373K and 623K, which is outside our T range. So we will not use this for now.
-#     (
-#         "Masui",
-#         4.87e-7,
-#         54.0,
-#     ),  # this is from the remi h dash data, which seems to have a different E than the original Masui paper?? unit converge issue??? double check
-#     (
-#         "Shiraishi et al.",
-#         4.44e-7,
-#         54.8,
-#     ),
-# ]
-
-# permeability_data_ni_converted = [
-#     (name, mol_to_particles(phi0_mol), kjmol_to_ev(E_kJmol))
-#     for name, phi0_mol, E_kJmol in permeability_data_ni
-# ]
-
+# ── Literature data ───────────────────────────────────────────────────────────
+# (name, phi_0 [mol-based], E [kJ/mol])
 
 permeability_data_flibe = [
     ("Nakamura_H (2015)", 1.37e-5, 129.7),
     ("Calderoni_T (2008)", 7.34e-8, 77.6),
-    ("Nishiumi_H (2016)", 3.76e-01, 194),
+    ("Nishiumi_H (2016)", 3.76e-1, 194.0),
 ]
-
 permeability_data_flibe_converted = [
-    (name, mol_to_particles(phi0_mol), kjmol_to_ev(E_kJmol))
-    for name, phi0_mol, E_kJmol in permeability_data_flibe
+    (name, mol_to_particles(phi0), kjmol_to_ev(E))
+    for name, phi0, E in permeability_data_flibe
 ]
 
 permeability_data_two_points = [
     ("Anderl_D (2004)", [873, 923], [1.49296e11, 1.806e11])  # T in K
 ]
 
-# =========================================================
-# Figure 1: Arrhenius plot with fitted curves + inline text
-# =========================================================
+# ── Plot ──────────────────────────────────────────────────────────────────────
+
 plt.rcParams.update(
     {
         "font.size": 18,
@@ -162,21 +118,19 @@ plt.rcParams.update(
         "legend.fontsize": 18,
     }
 )
+
 fig, ax = plt.subplots(figsize=(7.5, 5.5))
 
-T_bg = np.linspace(773.15, 973.15, 400)  # K range covering experiments
+T_bg = np.linspace(773.15, 973.15, 400)
 x_bg = 1000 / T_bg
 
-
-LIT_COLORS = ["#4C72B0", "#DD8452", "#55A868"]  # blue, orange, green
+LIT_COLORS = ["#4C72B0", "#DD8452", "#55A868"]
 LIT_STYLES = ["--", "-.", ":"]
 
 for i, (name, phi0, E) in enumerate(permeability_data_flibe_converted):
-    phi_bg = phi_arrhenius(T_bg, phi0, E)
-
     ax.plot(
         x_bg,
-        phi_bg,
+        phi_arrhenius(T_bg, phi0, E),
         color=LIT_COLORS[i],
         linestyle=LIT_STYLES[i],
         lw=2,
@@ -185,39 +139,29 @@ for i, (name, phi0, E) in enumerate(permeability_data_flibe_converted):
         zorder=1,
     )
 
-
 for name, T_points, phi_points in permeability_data_two_points:
-    T_points = np.array(T_points)
-    phi_points = np.array(phi_points)
-
-    x_points = 1000 / T_points
-
     ax.plot(
-        x_points,
-        phi_points,
+        1000 / np.array(T_points),
+        np.array(phi_points),
         color="purple",
         linestyle="--",
-        # marker="D",
-        markersize=7,
         lw=2,
         alpha=0.8,
-        label=f"{name}",
+        label=name,
         zorder=1,
     )
 
+# Fitted curves and inverted points from inversion output
+inv = pd.read_csv(INV_CSV)
+fit = pd.read_csv(FIT_CSV)
+inv.columns = inv.columns.str.strip()
+fit.columns = fit.columns.str.strip()
+
 for case_key, case in CASES.items():
-    inv = pd.read_csv(case["dir"] / "inverted_points.csv")
-    fit = pd.read_csv(case["dir"] / "fitted_params.csv")
-
-    inv.columns = inv.columns.str.strip()
-    fit.columns = fit.columns.str.strip()
-
     for run in RUNS:
-        data = inv[(inv["case"] == case_key) & (inv["run"] == run)].copy()
+        data = inv[(inv["case"] == case_key) & (inv["run"] == run)].sort_values("T_K")
         if data.empty:
             continue
-
-        data = data.sort_values("T_K")
 
         T = data["T_K"].values
         phi = data["phi"].values
@@ -245,27 +189,21 @@ for case_key, case in CASES.items():
 
         phi0 = float(row["phi0"].iloc[0])
         E = float(row["E_eV"].iloc[0])
-        phi0_SI = phi0 / N_A
-        E_kJmol = E * 96.485
-
         print(
-            f"P-{case['label']}-{RUN_LABEL[run]} ({CASE_SYMBOL[case_key]}) = {phi0_SI:.2e} * exp(-{E_kJmol:.2f}/(RT))"
+            f"P-{case['label']}-{RUN_LABEL[run]} ({CASE_SYMBOL[case_key]}) = "
+            f"{phi0 / N_A:.2e} * exp(-{ev_to_kjmol(E):.2f}/(RT))"
         )
 
         T_fit = np.linspace(T.min(), T.max(), 300)
-        x_fit = 1000 / T_fit
         phi_fit = phi_arrhenius(T_fit, phi0, E)
+        ax.plot(1000 / T_fit, phi_fit, color=iso_color, lw=2, zorder=3)
 
-        ax.plot(x_fit, phi_fit, color=iso_color, lw=2, zorder=3)
-
-        label = f"{case['label']}-{RUN_LABEL[run]} ({CASE_SYMBOL[case_key]})"
         dx, mult = LABEL_OFFSET.get((case_key, run), (0.002, 1.0))
         rot = LABEL_ROTATION.get((case_key, run), 0)
-
         ax.text(
-            x_fit[-1] + dx,
+            1000 / T_fit[-1] + dx,
             phi_fit[-1] * mult,
-            label,
+            f"{case['label']}-{RUN_LABEL[run]}",
             fontsize=11,
             color=iso_color,
             rotation=rot,
@@ -273,139 +211,26 @@ for case_key, case in CASES.items():
             va="center",
         )
 
-# x_min = 1000 / 973
-# x_max = 1000 / 773
-# pad = 0.05 * (x_max - x_min)
-
 ax.set_yscale("log")
 ax.set_xlabel("1000 / T  [1/K]")
-# ax.set_xlim(x_min - pad, x_max + pad)
-# ax.set_xticks([1000 / 973, 1000 / 923, 1000 / 873, 1000 / 823, 1000 / 773])
-ax.set_ylabel("Permeability  [particle·m⁻¹·s⁻¹·Pa⁻¹]")
-ax.grid(True, alpha=0.3)
+ax.set_ylabel(r"Permeability  [particle·m$^{-1}$·s$^{-1}$·Pa$^{-1}$]")
 ax.legend(loc="upper right", frameon=True, fontsize=10)
+ax.grid(True, axis="y", which="major", alpha=0.2)
+ax.grid(False, axis="x")
+ax.minorticks_off()
 
-fig.savefig(
-    OUT_DIR / "fitted_p_flibe.svg",
-    bbox_inches="tight",
-)
+# Twin x-axis showing temperature in K
+ax2 = ax.twiny()
+ax2.set_xlim(ax.get_xlim())
+T_ticks = [773, 823, 873, 923, 973]
+ax2.set_xticks([1000 / T for T in T_ticks])
+ax2.set_xticklabels([str(T) for T in T_ticks])
+ax2.set_xlabel("Temperature [K]", labelpad=10)
+ax2.grid(True, axis="x", which="major", alpha=0.2)
+ax2.spines["top"].set_visible(True)
+ax2.spines["top"].set_linewidth(1.0)
+
+out_path = OUTDIR / "fitted_phi_flibe.pdf"
+fig.savefig(out_path, bbox_inches="tight")
 plt.close(fig)
-print("Saved:", OUT_DIR / "fitted_p_flibe.svg")
-
-
-# # =========================================================
-# # Figure 2 + 3: linear y, x = T, one figure per run
-# # =========================================================
-# for run in RUNS:
-#     plt.rcParams.update(
-#         {
-#             "font.size": 18,
-#             "axes.labelsize": 18,
-#             "axes.titlesize": 18,
-#             "legend.fontsize": 18,
-#         }
-#     )
-#     fig_lin, ax_lin = plt.subplots(figsize=(7.5, 5.5))
-#     iso_color = ISOTOPE_COLOR[run]
-
-#     for case_key, case in CASES.items():
-#         inv = pd.read_csv(case["dir"] / "inverted_points.csv")
-#         inv.columns = inv.columns.str.strip()
-
-#         data = inv[(inv["case"] == case_key) & (inv["run"] == run)].copy()
-#         if data.empty:
-#             continue
-
-#         data = data.sort_values("T_K")
-#         T = data["T_K"].values
-#         phi = data["phi"].values
-
-#         cond_marker = CASE_MARKERS[case_key]
-
-#         ax_lin.plot(
-#             T,
-#             phi,
-#             linestyle="",
-#             marker=cond_marker,
-#             ms=12,
-#             mfc="white",
-#             mec=iso_color,
-#             mew=1.5,
-#             color=iso_color,
-#             label=case["label"],
-#         )
-
-#     ax_lin.set_xticks([773, 823, 873, 923, 973])
-#     ax_lin.set_xlim(768, 978)
-
-#     ax_lin.set_xlabel("T  [K]")
-#     ax_lin.set_ylabel("Permeability  [particle·m⁻¹·s⁻¹·Pa⁻¹]")
-#     ax_lin.grid(True, alpha=0.3)
-#     ax_lin.legend(frameon=True, fontsize=18)
-
-#     outname = f"{run.lower().replace(' ', '_')}_phi_linear_T_vs_phi.svg"
-#     fig_lin.savefig(
-#         OUT_DIR / outname,
-#         bbox_inches="tight",
-#     )
-#     plt.close(fig_lin)
-#     print("Saved:", OUT_DIR / outname)
-
-
-# # =========================================================
-# # Figure 4 + 5: log y, x = 1000/T, one figure per run
-# # =========================================================
-# for run in RUNS:
-#     plt.rcParams.update(
-#         {
-#             "font.size": 18,
-#             "axes.labelsize": 18,
-#             "axes.titlesize": 18,
-#             "legend.fontsize": 18,
-#         }
-#     )
-#     fig_log, ax_log = plt.subplots(figsize=(7.5, 5.5))
-#     iso_color = ISOTOPE_COLOR[run]
-
-#     for case_key, case in CASES.items():
-#         inv = pd.read_csv(case["dir"] / "inverted_points.csv")
-#         inv.columns = inv.columns.str.strip()
-
-#         data = inv[(inv["case"] == case_key) & (inv["run"] == run)].copy()
-#         if data.empty:
-#             continue
-
-#         data = data.sort_values("T_K")
-#         T = data["T_K"].values
-#         phi = data["phi"].values
-#         x = 1000 / T
-
-#         cond_marker = CASE_MARKERS[case_key]
-
-#         ax_log.plot(
-#             x,
-#             phi,
-#             linestyle="",
-#             marker=cond_marker,
-#             ms=12,
-#             mfc="white",
-#             mec=iso_color,
-#             mew=1.5,
-#             color=iso_color,
-#             label=case["label"],
-#         )
-
-#     ax_log.set_yscale("log")
-#     ax_log.set_xlabel("1000 / T  [1/K]")
-#     ax_log.set_ylabel("Permeability  [particle·m⁻¹·s⁻¹·Pa⁻¹]")
-#     ax_log.set_ylim(ymin=1e10, ymax=1e12)
-#     ax_log.grid(True, alpha=0.3)
-#     ax_log.legend(frameon=True, fontsize=18)
-
-#     outname = f"{run.lower().replace(' ', '_')}_phi_log_1000overT_vs_phi.svg"
-#     fig_log.savefig(
-#         OUT_DIR / outname,
-#         bbox_inches="tight",
-#     )
-#     plt.close(fig_log)
-#     print("Saved:", OUT_DIR / outname)
+print(f"[saved] {out_path}")
