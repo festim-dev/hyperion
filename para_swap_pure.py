@@ -380,7 +380,7 @@ def run_once(
         label: _get_flux_value(fluxes_dict["flux_by_label"][label])
         for label in fluxes_dict["six_labels"]
     }
-    total_down = float(np.sum([vals[l] for l in fluxes_dict["down_labels"]]))
+    total_down = float(np.sum([vals[label] for label in fluxes_dict["down_labels"]]))
     _dispose_model(my_model)
     return total_down
 
