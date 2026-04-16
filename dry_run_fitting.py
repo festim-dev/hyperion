@@ -27,7 +27,7 @@ import festim as F
 import h_transport_materials as htm
 
 from cylindrical_flux import CylindricalFlux
-from exp_data import dry_run
+from exp_data import dry_run, D_nickel
 
 COMM = MPI.COMM_WORLD
 RANK = COMM.rank
@@ -45,8 +45,7 @@ mesh = _read.mesh
 cell_tags = _read.cell_tags
 facet_tags = _read.facet_tags
 
-diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(isotope="h")
-D_solid = diffusivities_nickel[-1]
+D_solid = D_nickel
 
 KJ_MOL_TO_EV = 1.0 / 96.485  # 1 kJ/mol in eV
 N_A = 6.02214076e23  # Avogadro constant [mol^-1]
