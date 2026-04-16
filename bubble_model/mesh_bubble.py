@@ -4,11 +4,15 @@ import gmsh
 Lx = 0.078
 t_s = 0.002032
 t_l = 0.005363582
-Htot = t_s + t_l
+
 
 hole_len = 0.02
 # t_b = 1e-4  # bubble gap thickness (m)
 t_b = 0.001  # bubble gap thickness (m)
+
+t_extra = hole_len * t_b / Lx
+
+Htot = t_s + t_l + t_extra
 
 
 def generate_mesh(mesh_size=2e-4, fname="2Dbubble.msh"):
