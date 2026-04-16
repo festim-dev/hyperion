@@ -1,7 +1,7 @@
 from mesh import generate_mesh
 from dolfinx.log import set_log_level, LogLevel
 from cylindrical_flux import CylindricalFlux
-from dolfinx.io import gmshio
+from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 import festim as F
 import h_transport_materials as htm
@@ -13,9 +13,11 @@ set_log_level(LogLevel.INFO)
 
 generate_mesh(mesh_size=2e-4)
 model_rank = 0
-mesh, cell_tags, facet_tags = gmshio.read_from_msh(
-    "mesh.msh", MPI.COMM_WORLD, model_rank
-)
+read = gmshio.read_from_msh("mesh.msh", MPI.COMM_WORLD, model_rank)
+mesh = read.mesh
+cell_tags = read.cell_tags
+facet_tags = read.facet_tags
+
 
 # filter nickel and H
 diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(isotope="h")
@@ -108,7 +110,7 @@ my_model.subdomains = [
 
 my_model.method_interface = "penalty"
 interface = F.Interface(
-    id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e24
+    id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e27
 )
 
 my_model.interfaces = [interface]
@@ -132,9 +134,9 @@ my_model.species = [H]
 
 my_model.temperature = 773
 
-upstream_volume_surfaces = [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
+downstream_volume_surfaces = [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni]
 
-downstream_volume_surfaces = [top_cap_Ni, top_sidewall_Ni]
+upstream_volume_surfaces = [top_cap_Ni, top_sidewall_Ni]
 
 # case 1: Outside BC as fixed concentration
 # out_surface_bc = F.FixedConcentrationBC(subdomain=out_surf, species=H, value=0.0)
@@ -162,6 +164,7 @@ out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
 # )
 
 P_up = 1e5  # Pa
+P_down = 10  # Pa
 
 my_model.boundary_conditions = (
     [
@@ -172,12 +175,14 @@ my_model.boundary_conditions = (
     ]
     + [out_surface_bc]
     + [
-        F.FixedConcentrationBC(subdomain=s, species=H, value=0.0)
+        F.SievertsBC(
+            subdomain=s, species=H, pressure=P_down, S_0=K_solid, E_S=E_K_S_solid
+        )
         for s in downstream_volume_surfaces
     ]
-    +    [
+    + [
         F.HenrysBC(
-            subdomain=s, species=H, pressure=P_up, H_0=K_solid, E_H=E_K_S_solid
+            subdomain=s, species=H, pressure=P_up, H_0=K_liquid, E_H=E_K_S_liquid
         )  ###NOTE: E_s can not be 0.
         for s in [liquid_surface]
     ]
@@ -201,28 +206,36 @@ flux_out_top_cap_Ni = CylindricalFlux(field=H, surface=top_cap_Ni)
 
 # my_model.exports = [
 #     F.VTXSpeciesExport(
-#         field=H, filename="out-species_solid_case_1.bp", subdomain=solid_volume
+#         field=H,
+#         filename="results/out-species_solid_uncoated.bp",
+#         subdomain=solid_volume,
 #     ),
 #     F.VTXSpeciesExport(
-#         field=H, filename="out-species_fluid_case_1.bp", subdomain=fluid_volume
-#     ),
-# ]
-# my_model.exports = [
-#     F.VTXSpeciesExport(
-#         field=H, filename="out-species_solid_case_2.bp", subdomain=solid_volume
-#     ),
-#     F.VTXSpeciesExport(
-#         field=H, filename="out-species_fluid_case_2.bp", subdomain=fluid_volume
+#         field=H,
+#         filename="results/out-species_fluid_uncoated.bp",
+#         subdomain=fluid_volume,
 #     ),
 # ]
 my_model.exports = [
     F.VTXSpeciesExport(
-        field=H, filename="out-species_solid_case_3.bp", subdomain=solid_volume
+        field=H,
+        filename="results/out-species_solid_ideal_coating.bp",
+        subdomain=solid_volume,
     ),
     F.VTXSpeciesExport(
-        field=H, filename="out-species_fluid_case_3.bp", subdomain=fluid_volume
+        field=H,
+        filename="results/out-species_fluid_ideal_coating.bp",
+        subdomain=fluid_volume,
     ),
 ]
+# my_model.exports = [
+#     F.VTXSpeciesExport(
+#         field=H, filename="results/out-species_solid_case_3.bp", subdomain=solid_volume
+#     ),
+#     F.VTXSpeciesExport(
+#         field=H, filename="results/out-species_fluid_case_3.bp", subdomain=fluid_volume
+#     ),
+# ]
 my_model.exports += downstream_fluxes
 my_model.exports += fluxes_in
 my_model.exports += [glovebox_flux]
@@ -282,16 +295,3 @@ ax.set_yscale("log")
 
 fig.tight_layout()
 plt.show()
-
-
-# replace this based on what we see in paraview
-# c_flibe = 1.32e25
-# c_ni = 2.17e25
-
-# K_s_ni = solubilities_nickel[0].value(my_model.temperature)  # particle m^-3 Pa^-0.5
-# K_s_flibe = solubilities_flibe[0].value(my_model.temperature)  # particle m^-3 Pa^-1
-
-# expected_c_flibe = (c_ni / K_s_ni) ** 2 * K_s_flibe
-
-# print("Expected concentration in FLiBe (particle/m^3): ", expected_c_flibe)
-# print("Real concentration in FLiBe (particle/m^3): ", c_flibe)
