@@ -1,36 +1,72 @@
-import festim as F
-from mesh import generate_mesh, set_y_ft
-from dolfinx.log import set_log_level, LogLevel
-from cylindrical_flux import CylindricalFlux
-from dolfinx.io import gmsh as gmshio
-from mpi4py import MPI
-import h_transport_materials as htm
-from typing import Tuple, Optional, List, Dict
-import numpy as np
-import matplotlib.pyplot as plt
-from pathlib import Path
-from dataclasses import dataclass
-import math
-import matplotlib
+"""
+Pointwise inversion of FLiBe permeability (phi_flibe) from SWAP experimental flux data.
+
+For each experimental point, a bisection search finds the phi_flibe value that makes
+the simulated downstream flux match the measured flux. Uncertainty in phi_flibe is
+propagated from the experimental flux uncertainty via a finite-difference derivative.
+
+An Arrhenius fit is applied to the recovered phi_flibe(T) points per boundary condition
+mode and run, with weighted least squares using the propagated 1-sigma uncertainties.
+
+Both swap_infinite and swap_transparent cases are inverted and overlaid on the same plot.
+Each case uses its own Ni solubility derived from the corresponding entry in
+results/dry_run_phi_arrhenius_fits.txt (produced by dry_run_fitting.py).
+
+Outputs (saved to results/):
+    dual_pointwise_lnphi_invT.png  -- Arrhenius plot with both cases and fit bands
+    inverted_points.csv            -- phi_eff per experimental point
+    fitted_params.csv              -- Arrhenius fit parameters (phi_0, E, R2)
+    logs/fit_summary.txt           -- per-point fit diagnostics
+"""
+
 import gc
-from petsc4py import PETSc
+import math
+import csv
 import multiprocessing as mp
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 import matplotlib as mpl
+import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.lines import Line2D
+from mpi4py import MPI
+from petsc4py import PETSc
+from dolfinx.log import LogLevel, set_log_level
+from dolfinx.io import gmsh as gmshio
+import festim as F
+import h_transport_materials as htm
+
+from cylindrical_flux import CylindricalFlux
+from mesh import generate_mesh, set_y_ft
+from exp_data import (
+    swap_infinite,
+    swap_transparent,
+    swap_flux_err,
+    load_ni_permeability,
+    D_nickel,
+)
 
 try:
     mp.set_start_method("spawn")
 except RuntimeError:
-    pass  # already set elsewhere
+    pass
 
-# ------------------------------ Globals ------------------------------
-_DEFER_SHOW = True
-kB_eV = 8.617333262e-5  # eV/K
-_mesh_cache: dict[str, tuple] = {}
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+kB_eV = 8.617333262e-5  # Boltzmann constant [eV/K]
+NA = 6.02214076e23  # Avogadro constant [mol^-1]
+
+OUTDIR = Path("results")
+OUTDIR.mkdir(parents=True, exist_ok=True)
+
 _RANK0 = MPI.COMM_WORLD.rank == 0
+_mesh_cache: dict[str, tuple] = {}
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-# ------------------------------ Utilities ------------------------------
 def _ensure_and_save(fig, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=220, bbox_inches="tight")
@@ -39,8 +75,18 @@ def _ensure_and_save(fig, out_path: Path) -> None:
     plt.close(fig)
 
 
-# ------------------------------ Model disposal ------------------------------
-def _dispose_model(m):
+def kJmol_to_eV(E_kJmol: float) -> float:
+    return float(E_kJmol) / 96.485332123
+
+
+def mol_to_particles(x: float) -> float:
+    return x * NA
+
+
+# ── Model disposal ────────────────────────────────────────────────────────────
+
+
+def _dispose_model(m) -> None:
     if m is None:
         return
     try:
@@ -48,10 +94,8 @@ def _dispose_model(m):
             for attr in ("data", "field", "surface"):
                 if hasattr(e, attr):
                     setattr(e, attr, None)
-        m.exports = []
-        m.interfaces = []
-        m.subdomains = []
-        m.boundary_conditions = []
+        for attr in ("exports", "interfaces", "subdomains", "boundary_conditions"):
+            setattr(m, attr, [])
         for attr in ("_forms", "_function_spaces", "_solvers", "_timers"):
             if hasattr(m, attr):
                 setattr(m, attr, None)
@@ -69,10 +113,11 @@ def _dispose_model(m):
         pass
 
 
-# ------------------------------ Mesh I/O ------------------------------
+# ── Mesh I/O ──────────────────────────────────────────────────────────────────
+
+
 def _mesh_key_from_yft(y_ft: float) -> str:
-    y5 = float(f"{float(y_ft):.5f}")
-    return f"mesh_{y5:.5f}.msh"
+    return f"mesh_{float(y_ft):.5f}.msh"
 
 
 def load_or_make_mesh(mesh_file: str, mesh_size: float, model_rank: int = 0):
@@ -85,159 +130,91 @@ def load_or_make_mesh(mesh_file: str, mesh_size: float, model_rank: int = 0):
         return _mesh_cache[mesh_file]
 
     _read = gmshio.read_from_msh(mesh_file, MPI.COMM_WORLD, model_rank)
-    mesh = _read.mesh
-    cell_tags = _read.cell_tags
-    facet_tags = _read.facet_tags
-    _mesh_cache[mesh_file] = (mesh, cell_tags, facet_tags)
+    _mesh_cache[mesh_file] = (_read.mesh, _read.cell_tags, _read.facet_tags)
     return _mesh_cache[mesh_file]
 
 
-def kJmol_to_eV(E_kJmol: float) -> float:
-    # 1 eV per molecule = 96.485332123... kJ/mol
-    return float(E_kJmol) / 96.485332123
+# ── Ni solubility from permeability ──────────────────────────────────────────
 
 
-NA = 6.02214076e23
-CONVERT_MOL_TO_PARTICLE = True
-
-P0_COATED_INPUT = 1.0392367934e-07  # "no flux bc" / ideal coating
-EP_COATED_KJMOL = 45.501620
-
-P0_UNCOATED_INPUT = 9.0326719717e-07  # "no coating bc"
-EP_UNCOATED_KJMOL = 57.591963
-
-
-def _to_particle_P0(P0_in: float) -> float:
-    return float(P0_in) * NA if CONVERT_MOL_TO_PARTICLE else float(P0_in)
-
-
-NI_PERM_BY_OUTBC = {
-    "particle_flux_zero": dict(
-        P0=_to_particle_P0(P0_COATED_INPUT), EP_kJmol=EP_COATED_KJMOL
-    ),
-    "sieverts": dict(P0=_to_particle_P0(P0_UNCOATED_INPUT), EP_kJmol=EP_UNCOATED_KJMOL),
-}
-
-
-def make_ni_solubility_from_perm(
-    D_nickel: htm.Diffusivity, P0_particle: float, EP_kJmol: float
-):
+def _ni_solubility_for_bc(bc_type: str) -> htm.Solubility:
     """
-    Build a Ni solubility object consistent with:
-      - Ni diffusivity D_nickel (kept as-is)
-      - Ni permeability (Sieverts law) given by (P0, EP)
-    using S(T) = P(T) / D(T).
+    Load Ni permeability from dry_run_phi_arrhenius_fits.txt and derive
+    solubility via S(T) = phi(T) / D(T), using the shared D_nickel from exp_data.
+
+    bc_type: 'particle_flux_zero' (ideal coating) or 'sieverts' (uncoated).
     """
-    perm_ni = htm.Permeability(
-        pre_exp=float(P0_particle),
-        act_energy=kJmol_to_eV(float(EP_kJmol)),
+    ni_perm = load_ni_permeability()
+    prm = ni_perm[bc_type]
+    phi_0_particles = mol_to_particles(prm["phi_0"])
+    E_phi_eV = kJmol_to_eV(prm["E_phi_kJmol"])
+
+    perm = htm.Permeability(pre_exp=phi_0_particles, act_energy=E_phi_eV, law="sievert")
+    return htm.Solubility(
+        S_0=perm.pre_exp / D_nickel.pre_exp,
+        E_S=perm.act_energy - D_nickel.act_energy,
         law="sievert",
     )
 
-    K_S_ni = htm.Solubility(
-        S_0=perm_ni.pre_exp / D_nickel.pre_exp,
-        E_S=perm_ni.act_energy - D_nickel.act_energy,
-        law="sievert",
-    )
-    return K_S_ni
+
+# ── Materials ─────────────────────────────────────────────────────────────────
 
 
-def pick_ni_solubility_for_outbc(
-    out_bc: dict, D_nickel: htm.Diffusivity
-) -> htm.Solubility:
-    t = (out_bc or {}).get("type", "particle_flux_zero")
-    t = str(t).lower()
-    if t not in NI_PERM_BY_OUTBC:
-        t = "particle_flux_zero"
-    prm = NI_PERM_BY_OUTBC[t]
-    return make_ni_solubility_from_perm(D_nickel, prm["P0"], prm["EP_kJmol"])
-
-
-def outbc_from_outmode(out_mode: str, P_gb_default: float = 1e-30) -> dict:
-    out_mode = (out_mode or "").lower()
-    if out_mode == "sieverts":
-        return {"type": "sieverts", "pressure": P_gb_default}
-    elif out_mode == "particle_flux_zero":
-        return {"type": "particle_flux_zero"}
-    else:
-        return {"type": "particle_flux_zero"}
-
-
-# ------------------------------ Materials & Model ------------------------------
 def make_materials(D_solid, D_liquid, K_solid, permeability_liquid):
-    D_0_solid = D_solid.pre_exp.magnitude
-    E_D_solid = D_solid.act_energy.magnitude
-    K_S_0_solid = K_solid.pre_exp.magnitude
-    E_K_S_solid = K_solid.act_energy.magnitude
-
-    D_0_liquid = D_liquid.pre_exp.magnitude
-    E_D_liquid = D_liquid.act_energy.magnitude
     K_S_liquid = htm.Solubility(
         S_0=permeability_liquid.pre_exp / D_liquid.pre_exp,
         E_S=permeability_liquid.act_energy - D_liquid.act_energy,
         law=permeability_liquid.law,
     )
-    K_S_0_liquid = K_S_liquid.pre_exp.magnitude
-    E_K_S_liquid = K_S_liquid.act_energy.magnitude
-
     mat_solid = F.Material(
-        D_0=D_0_solid,
-        E_D=E_D_solid,
-        K_S_0=K_S_0_solid,
-        E_K_S=E_K_S_solid,
+        D_0=D_solid.pre_exp.magnitude,
+        E_D=D_solid.act_energy.magnitude,
+        K_S_0=K_solid.pre_exp.magnitude,
+        E_K_S=K_solid.act_energy.magnitude,
         solubility_law="sievert",
     )
     mat_liquid = F.Material(
-        D_0=D_0_liquid,
-        E_D=E_D_liquid,
-        K_S_0=K_S_0_liquid,
-        E_K_S=E_K_S_liquid,
+        D_0=D_liquid.pre_exp.magnitude,
+        E_D=D_liquid.act_energy.magnitude,
+        K_S_0=K_S_liquid.pre_exp.magnitude,
+        E_K_S=K_S_liquid.act_energy.magnitude,
         solubility_law="henry",
     )
     return mat_solid, mat_liquid
 
 
+# ── Model builder ─────────────────────────────────────────────────────────────
+
+
 def make_model(
     D_flibe: htm.Diffusivity,
-    D_nickel: htm.Diffusivity,
     permeability_flibe: htm.Permeability,
     K_S_nickel: htm.Solubility,
     temperature: float,
     P_up: float,
+    P_down: float = 5.0,
     mesh_size: float = 2e-4,
     penalty_term: float = 1e22,
-    P_down: float = 5.0,
     out_bc: dict | None = None,
     y_ft: float | None = None,
-) -> Tuple[F.HydrogenTransportProblemDiscontinuous, dict[str, list | CylindricalFlux]]:
+) -> Tuple[F.HydrogenTransportProblemDiscontinuous, dict]:
     if y_ft is None:
         raise ValueError("y_ft must be provided")
 
     y_ft_5 = float(f"{float(y_ft):.5f}")
     set_y_ft(y_ft_5)
 
-    Path("exports/yft_record").mkdir(parents=True, exist_ok=True)
-    if _RANK0:
-        with open("exports/yft_record/y_ft_values.txt", "a") as f:
-            f.write(f"{y_ft_5:.5f}\n")
-
-    mesh_file = _mesh_key_from_yft(y_ft_5)
-    model_rank = 0
     mesh, cell_tags, facet_tags = load_or_make_mesh(
-        mesh_file, mesh_size, model_rank=model_rank
+        _mesh_key_from_yft(y_ft_5), mesh_size
     )
-
     mat_solid, mat_liquid = make_materials(
-        D_solid=D_nickel,
-        D_liquid=D_flibe,
-        K_solid=K_S_nickel,
-        permeability_liquid=permeability_flibe,
+        D_nickel, D_flibe, K_S_nickel, permeability_flibe
     )
 
-    H_0_liq = mat_liquid.K_S_0
-    E_H_liq = mat_liquid.E_K_S
     K_S_0_Ni = mat_solid.K_S_0
     E_S_Ni = mat_solid.E_K_S
+    H_0_liq = mat_liquid.K_S_0
+    E_H_liq = mat_liquid.E_K_S
 
     fluid_volume = F.VolumeSubdomain(id=1, material=mat_liquid)
     solid_volume = F.VolumeSubdomain(id=2, material=mat_solid)
@@ -255,13 +232,7 @@ def make_model(
     bottom_cap_Ni = F.SurfaceSubdomain(id=10)
     liquid_solid_interface = F.SurfaceSubdomain(id=99)
 
-    my_model = F.HydrogenTransportProblemDiscontinuous()
-    my_model.mesh = F.Mesh(mesh, coordinate_system="cylindrical")
-    my_model.facet_meshtags = facet_tags
-    my_model.volume_meshtags = cell_tags
-    my_model.subdomains = [
-        solid_volume,
-        fluid_volume,
+    all_surface_subdomains = [
         out_surf,
         left_bc_liquid,
         left_bc_top_Ni,
@@ -276,12 +247,17 @@ def make_model(
         liquid_solid_interface,
     ]
 
+    my_model = F.HydrogenTransportProblemDiscontinuous()
+    my_model.mesh = F.Mesh(mesh, coordinate_system="cylindrical")
+    my_model.facet_meshtags = facet_tags
+    my_model.volume_meshtags = cell_tags
+    my_model.subdomains = [solid_volume, fluid_volume] + all_surface_subdomains
     my_model.method_interface = "penalty"
-    interface = F.Interface(
-        id=99, subdomains=[solid_volume, fluid_volume], penalty_term=penalty_term
-    )
-    my_model.interfaces = [interface]
-
+    my_model.interfaces = [
+        F.Interface(
+            id=99, subdomains=[solid_volume, fluid_volume], penalty_term=penalty_term
+        )
+    ]
     my_model.surface_to_volume = {
         out_surf: solid_volume,
         left_bc_liquid: fluid_volume,
@@ -309,20 +285,14 @@ def make_model(
         for s in [top_cap_Ni, top_sidewall_Ni]
     ] + [
         F.HenrysBC(
-            subdomain=liquid_surface,
-            species=H,
-            pressure=P_up,
-            H_0=H_0_liq,
-            E_H=E_H_liq,
+            subdomain=liquid_surface, species=H, pressure=P_up, H_0=H_0_liq, E_H=E_H_liq
         )
     ]
 
-    if out_bc is None:
-        out_bc = {"type": "none"}
-    out_bcs = []
+    out_bc = out_bc or {"type": "none"}
     t = out_bc.get("type", "none").lower()
     if t == "sieverts":
-        out_bcs = [
+        outer_bcs = [
             F.SievertsBC(
                 subdomain=out_surf,
                 species=H,
@@ -332,53 +302,45 @@ def make_model(
             )
         ]
     elif t == "particle_flux_zero":
-        out_bcs = [F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)]
+        outer_bcs = [F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)]
+    else:
+        outer_bcs = []
 
-    my_model.boundary_conditions = upstream_bcs + downstream_bcs + out_bcs
+    my_model.boundary_conditions = upstream_bcs + downstream_bcs + outer_bcs
     my_model.settings = F.Settings(atol=1e12, rtol=1e-13, transient=False)
 
-    flux_out_top_cap_Ni = CylindricalFlux(field=H, surface=top_cap_Ni)
-    flux_out_top_sidewall_Ni = CylindricalFlux(field=H, surface=top_sidewall_Ni)
-    flux_out_liquid_surface = CylindricalFlux(field=H, surface=liquid_surface)
-    flux_out_mid_membrane_Ni = CylindricalFlux(field=H, surface=mid_membrane_Ni)
-    flux_out_bottom_sidewall_Ni = CylindricalFlux(field=H, surface=bottom_sidewall_Ni)
-    flux_out_bottom_cap_Ni = CylindricalFlux(field=H, surface=bottom_cap_Ni)
-    glovebox_flux = CylindricalFlux(field=H, surface=out_surf)
+    flux_top_cap = CylindricalFlux(field=H, surface=top_cap_Ni)
+    flux_top_sidewall = CylindricalFlux(field=H, surface=top_sidewall_Ni)
+    flux_liquid_surface = CylindricalFlux(field=H, surface=liquid_surface)
+    flux_mid_membrane = CylindricalFlux(field=H, surface=mid_membrane_Ni)
+    flux_bot_sidewall = CylindricalFlux(field=H, surface=bottom_sidewall_Ni)
+    flux_bot_cap = CylindricalFlux(field=H, surface=bottom_cap_Ni)
+    flux_glovebox = CylindricalFlux(field=H, surface=out_surf)
 
     my_model.exports = [
-        flux_out_top_cap_Ni,
-        flux_out_top_sidewall_Ni,
-        flux_out_bottom_sidewall_Ni,
-        flux_out_liquid_surface,
-        flux_out_mid_membrane_Ni,
-        flux_out_bottom_cap_Ni,
-        glovebox_flux,
+        flux_top_cap,
+        flux_top_sidewall,
+        flux_bot_sidewall,
+        flux_liquid_surface,
+        flux_mid_membrane,
+        flux_bot_cap,
+        flux_glovebox,
     ]
 
     flux_by_label = {
-        "top_cap_Ni": flux_out_top_cap_Ni,
-        "top_sidewall_Ni": flux_out_top_sidewall_Ni,
-        "liquid_surface": flux_out_liquid_surface,
-        "mid_membrane_Ni": flux_out_mid_membrane_Ni,
-        "bottom_sidewall_Ni": flux_out_bottom_sidewall_Ni,
-        "bottom_cap_Ni": flux_out_bottom_cap_Ni,
+        "top_cap_Ni": flux_top_cap,
+        "top_sidewall_Ni": flux_top_sidewall,
+        "liquid_surface": flux_liquid_surface,
+        "mid_membrane_Ni": flux_mid_membrane,
+        "bottom_sidewall_Ni": flux_bot_sidewall,
+        "bottom_cap_Ni": flux_bot_cap,
     }
-    six_labels = [
-        "top_cap_Ni",
-        "top_sidewall_Ni",
-        "liquid_surface",
-        "mid_membrane_Ni",
-        "bottom_sidewall_Ni",
-        "bottom_cap_Ni",
-    ]
-    down_labels = ["mid_membrane_Ni", "bottom_cap_Ni", "bottom_sidewall_Ni"]
-    up_labels = ["top_cap_Ni", "top_sidewall_Ni", "liquid_surface"]
     fluxes_dict = {
         "flux_by_label": flux_by_label,
-        "six_labels": six_labels,
-        "glovebox_flux": glovebox_flux,
-        "up_labels": up_labels,
-        "down_labels": down_labels,
+        "six_labels": list(flux_by_label.keys()),
+        "glovebox_flux": flux_glovebox,
+        "up_labels": ["top_cap_Ni", "top_sidewall_Ni", "liquid_surface"],
+        "down_labels": ["mid_membrane_Ni", "bottom_cap_Ni", "bottom_sidewall_Ni"],
     }
     return my_model, fluxes_dict
 
@@ -399,20 +361,11 @@ def _get_flux_value(flux_obj) -> float:
 
 
 def run_once(
-    T_K: float,
-    P_up: float,
-    P_down: float,
-    D_flibe,
-    D_nickel,
-    permeability_flibe,
-    K_S_nickel,
-    out_bc: dict | None = None,
-    y_ft: float | None = None,
-):
+    T_K, P_up, P_down, D_flibe, permeability_flibe, K_S_nickel, out_bc=None, y_ft=None
+) -> float:
     my_model, fluxes_dict = make_model(
         temperature=T_K,
         D_flibe=D_flibe,
-        D_nickel=D_nickel,
         permeability_flibe=permeability_flibe,
         K_S_nickel=K_S_nickel,
         P_up=P_up,
@@ -423,18 +376,18 @@ def run_once(
     my_model.initialise()
     my_model.run()
 
-    flux_objects = fluxes_dict["flux_by_label"]
-    six_labels = fluxes_dict["six_labels"]
-    vals_six = {label: _get_flux_value(flux_objects[label]) for label in six_labels}
-
-    down_labels = fluxes_dict["down_labels"]
-    total_down = float(np.sum([vals_six[label] for label in down_labels], dtype=float))
+    vals = {
+        label: _get_flux_value(fluxes_dict["flux_by_label"][label])
+        for label in fluxes_dict["six_labels"]
+    }
+    total_down = float(np.sum([vals[l] for l in fluxes_dict["down_labels"]]))
     _dispose_model(my_model)
-
     return total_down
 
 
-# ------------------------------ Invert → Fit ------------------------------
+# ── Experimental data helpers ─────────────────────────────────────────────────
+
+
 @dataclass
 class CalibPoint:
     case: str
@@ -448,7 +401,7 @@ class CalibPoint:
     J_exp: float
 
 
-def _collect_points_for_cases(
+def _collect_points(
     cases: Dict,
     T2K: Dict[float, float],
     Y_FT_BY_TEMP_C: Dict[float, float],
@@ -458,24 +411,22 @@ def _collect_points_for_cases(
     for case_name, cfg in cases.items():
         if allowed_case_names and case_name not in allowed_case_names:
             continue
-        if not (case_name.startswith("swap")):
+        if not case_name.startswith("swap"):
             continue
-        table = cfg["table"]
-        for Tc, row in table.items():
-            Tk = T2K[Tc]
-            y_raw = Y_FT_BY_TEMP_C.get(Tc, list(Y_FT_BY_TEMP_C.values())[-1])
-            y5 = float(f"{float(y_raw):.5f}")
-            runs = row.get("runs", {})
-            for run_name, cond in runs.items():
+        for Tc, row in cfg["table"].items():
+            y5 = float(
+                f"{float(Y_FT_BY_TEMP_C.get(Tc, list(Y_FT_BY_TEMP_C.values())[-1])):.5f}"
+            )
+            for run_name, cond in row.get("runs", {}).items():
                 pts.append(
                     CalibPoint(
                         case=case_name,
                         T_C=float(Tc),
-                        T_K=float(Tk),
+                        T_K=float(T2K[Tc]),
                         run=str(run_name),
                         P_up=float(cond["P_up"]),
                         P_down=float(cond["P_down"]),
-                        P_gb=float(cond.get("P_gb")) if "P_gb" in cond else None,
+                        P_gb=float(cond["P_gb"]) if "P_gb" in cond else None,
                         y_ft=y5,
                         J_exp=float(cond["J_exp"]),
                     )
@@ -486,51 +437,32 @@ def _collect_points_for_cases(
     return pts
 
 
-# --- EXP error lookup ---
-exp_error_data = {
-    "swap_infinite": {
-        500.0: {"runs": {"Run 1": 2.66e14, "Run 2": 2.96e14, "Run 3": 1.33e14}},
-        550.0: {"runs": {"Run 1": 4.88e14, "Run 2": 5.81e14}},
-        600.0: {"runs": {"Run 1": 5.25e14, "Run 2": 6.84e14, "Run 3": 3.08e14}},
-        650.0: {"runs": {"Run 2": 7.43e14}},
-        700.0: {"runs": {"Run 1": 6.17e14, "Run 2": 7.08e14, "Run 3": 4.84e14}},
-    },
-    "swap_transparent": {
-        500.0: {"runs": {"Run 1": 2.66e14, "Run 2": 2.96e14, "Run 3": 1.33e14}},
-        550.0: {"runs": {"Run 1": 4.88e14, "Run 2": 5.81e14}},
-        600.0: {"runs": {"Run 1": 5.25e14, "Run 2": 6.84e14, "Run 3": 3.08e14}},
-        650.0: {"runs": {"Run 2": 7.43e14}},
-        700.0: {"runs": {"Run 1": 6.17e14, "Run 2": 7.08e14, "Run 3": 4.84e14}},
-    },
-}
-
-
-def get_exp_error(case_name: str, temp, run_name: str = "Run 1"):
-    case = exp_error_data.get(case_name)
+def get_exp_error(
+    case_name: str, temp: float, run_name: str = "Run 1"
+) -> Optional[float]:
+    """Return 1-sigma flux uncertainty by dividing the stored k=2 value by 2."""
+    case = swap_flux_err.get(case_name)
     if case is None:
         return None
     entry = case.get(float(temp))
     if entry is None:
         return None
-    if isinstance(entry, (int, float)):
-        val = float(entry) / 2.0
-        return val if np.isfinite(val) and val > 0.0 else None
-    if isinstance(entry, dict):
-        runs = entry.get("runs")
-        val = runs.get(run_name) if isinstance(runs, dict) else entry.get(run_name)
-        try:
-            val = float(val) / 2.0
-        except (TypeError, ValueError):
-            return None
-        return val if np.isfinite(val) and val > 0.0 else None
-    return None
+    runs = entry.get("runs") if isinstance(entry, dict) else None
+    raw = runs.get(run_name) if isinstance(runs, dict) else None
+    try:
+        val = float(raw) / 2.0
+    except (TypeError, ValueError):
+        return None
+    return val if np.isfinite(val) and val > 0.0 else None
 
 
-# ------------------------------ Core: inversion with uncertainty ------------------------------
-def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
+# ── Bisection inversion ───────────────────────────────────────────────────────
+
+
+def _invert_point_child(p_dict, D_flibe, K_S_nickel, q):
     tiny = np.finfo(float).tiny
 
-    class P:
+    class _P:
         __slots__ = (
             "case",
             "T_C",
@@ -546,7 +478,7 @@ def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
         def __init__(self, **kw):
             [setattr(self, k, kw[k]) for k in self.__slots__]
 
-    p = P(**p_dict)
+    p = _P(**p_dict)
     out_bc = (
         {"type": "sieverts", "pressure": p.P_gb}
         if p.P_gb is not None
@@ -555,18 +487,14 @@ def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
 
     def J_of_phi(phi_val: float) -> float:
         perm = htm.Permeability(pre_exp=float(phi_val), act_energy=0.0, law="henry")
-        out = run_once(
-            p.T_K,
-            p.P_up,
-            p.P_down,
-            D_flibe,
-            D_nickel,
-            perm,
-            K_S_nickel,
-            out_bc,
-            p.y_ft,
+        return max(
+            float(
+                run_once(
+                    p.T_K, p.P_up, p.P_down, D_flibe, perm, K_S_nickel, out_bc, p.y_ft
+                )
+            ),
+            tiny,
         )
-        return max(float(out), tiny)
 
     phi_lo, phi_hi = 1e10, 1e15
     tol_log, maxit = 3e-3, 18
@@ -575,10 +503,10 @@ def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
 
     J_lo, J_hi = J_of_phi(10.0**log_lo), J_of_phi(10.0**log_hi)
     if (J_lo - target) * (J_hi - target) > 0.0:
-        if J_lo < target and J_hi < target:
+        if J_lo < target:
             log_hi += 1.0
             J_hi = J_of_phi(10.0**log_hi)
-        elif J_lo > target and J_hi > target:
+        else:
             log_lo -= 1.0
             J_lo = J_of_phi(10.0**log_lo)
 
@@ -595,23 +523,13 @@ def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
     q.put(10.0 ** (0.5 * (log_lo + log_hi)))
 
 
-def _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel) -> float:
+def _phi_match_exp(p: CalibPoint, D_flibe, K_S_nickel) -> float:
     ctx = mp.get_context("spawn")
     q = ctx.SimpleQueue()
-    p_dict = {
-        "case": p.case,
-        "T_C": p.T_C,
-        "T_K": p.T_K,
-        "run": p.run,
-        "P_up": p.P_up,
-        "P_down": p.P_down,
-        "P_gb": p.P_gb,
-        "y_ft": p.y_ft,
-        "J_exp": p.J_exp,
-    }
+    p_dict = {s: getattr(p, s) for s in p.__dataclass_fields__}
     proc = ctx.Process(
         target=_invert_point_child,
-        args=(p_dict, D_flibe, D_nickel, K_S_nickel, q),
+        args=(p_dict, D_flibe, K_S_nickel, q),
         daemon=False,
     )
     proc.start()
@@ -620,56 +538,57 @@ def _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel) -> float:
     return float(phi_T)
 
 
-def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
-    """
-    Perform pointwise inversion for each experimental point and
-    group results by (case, run).
+# ── Inversion with uncertainty propagation ────────────────────────────────────
 
-    Returns:
-        invT_by_case:      dict[(case, run)] -> np.array of 1/T
-        lnphi_by_case:     dict[(case, run)] -> np.array of ln(phi)
-        sig_ln_by_case:    dict[(case, run)] -> np.array of sigma_lnphi
-        meta_by_case:      dict[(case, run)] -> list[CalibPoint]
-        metrics_by_case:   dict[(case, run)] -> list[dict(J_fit, err_abs, err_rel)]
-    """
-    invT_by_case, lnphi_by_case, sig_ln_by_case, meta_by_case, metrics_by_case = (
-        {},
-        {},
-        {},
-        {},
-        {},
-    )
-    case_run_pairs = sorted(
-        {(p.case, p.run) for p in pts}, key=lambda cr: (cr[0], cr[1])
-    )
 
-    for case_name, run_name in case_run_pairs:
+def _invert_points_with_sigma(
+    pts: List[CalibPoint],
+    D_flibe: htm.Diffusivity,
+    K_S_nickel_by_case: Dict[str, htm.Solubility],
+):
+    """
+    Run pointwise inversion for each CalibPoint, using the K_S_nickel that
+    corresponds to each case's outer BC. Propagate flux uncertainty to
+    ln(phi) uncertainty via a finite-difference derivative.
+
+    Returns five dicts keyed by (case, run):
+        invT_by_case, lnphi_by_case, sig_ln_by_case, meta_by_case, metrics_by_case
+    """
+    invT_by, lnphi_by, sig_by, meta_by, metrics_by = {}, {}, {}, {}, {}
+
+    for case_name, run_name in sorted({(p.case, p.run) for p in pts}):
+        K_S_nickel = K_S_nickel_by_case[case_name]
         invT_list, lnphi_list, sig_list, meta_rows, metrics_rows = [], [], [], [], []
+
         for p in [pp for pp in pts if pp.case == case_name and pp.run == run_name]:
-            phi_T = _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel)
+            phi_T = _phi_match_exp(p, D_flibe, K_S_nickel)
             tiny = np.finfo(float).tiny
 
+            out_bc_p = (
+                {"type": "sieverts", "pressure": p.P_gb}
+                if p.P_gb is not None
+                else {"type": "particle_flux_zero"}
+            )
+
             def J_of_phi(phi_val: float) -> float:
-                perm_loc = htm.Permeability(
+                perm = htm.Permeability(
                     pre_exp=float(phi_val), act_energy=0.0, law="henry"
                 )
-                out_bc_p = (
-                    {"type": "sieverts", "pressure": p.P_gb}
-                    if p.P_gb is not None
-                    else {"type": "particle_flux_zero"}
+                return max(
+                    float(
+                        run_once(
+                            p.T_K,
+                            p.P_up,
+                            p.P_down,
+                            D_flibe,
+                            perm,
+                            K_S_nickel,
+                            out_bc_p,
+                            p.y_ft,
+                        )
+                    ),
+                    tiny,
                 )
-                out = run_once(
-                    p.T_K,
-                    p.P_up,
-                    p.P_down,
-                    D_flibe,
-                    D_nickel,
-                    perm_loc,
-                    K_S_nickel,
-                    out_bc_p,
-                    p.y_ft,
-                )
-                return max(float(out), tiny)
 
             J_fit = J_of_phi(phi_T)
             J_exp = max(float(p.J_exp), tiny)
@@ -679,17 +598,13 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
             sigma_J = get_exp_error(p.case, p.T_C, p.run)
             sigma_lnphi = None
             if sigma_J and np.isfinite(sigma_J) and sigma_J > 0.0:
-                rel_step = 0.02
-                delta = max(rel_step * float(phi_T), 1e-16)
+                delta = max(0.02 * float(phi_T), 1e-16)
                 try:
-                    Jp = J_of_phi(float(phi_T) + delta)
-                    Jm = J_of_phi(max(float(phi_T) - delta, tiny))
-                    dJ_dphi = (Jp - Jm) / (2.0 * delta)
-                    sigma_lnphi = (sigma_J / max(abs(dJ_dphi), tiny)) / max(
-                        float(phi_T), tiny
-                    )
-                    if (not np.isfinite(sigma_lnphi)) or (sigma_lnphi <= 0.0):
-                        sigma_lnphi = None
+                    dJ_dphi = (
+                        J_of_phi(phi_T + delta) - J_of_phi(max(phi_T - delta, tiny))
+                    ) / (2.0 * delta)
+                    val = (sigma_J / max(abs(dJ_dphi), tiny)) / max(float(phi_T), tiny)
+                    sigma_lnphi = float(val) if np.isfinite(val) and val > 0.0 else None
                 except Exception:
                     sigma_lnphi = None
 
@@ -703,112 +618,91 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
 
             if _RANK0:
                 line = (
-                    f"[{p.case} — {p.run}] T={p.T_C:.0f}°C: "
+                    f"[{p.case} — {p.run}] T={p.T_C:.0f}C: "
                     f"J_exp={J_exp:.3e}, J_fit={J_fit:.3e}, rel_err={err_rel * 100:.2f}%"
                 )
-                log_dir = Path("exports") / "logs"
-                log_dir.mkdir(parents=True, exist_ok=True)
-                log_file = log_dir / "fit_summary.txt"
+                log_file = OUTDIR / "logs" / "fit_summary.txt"
+                log_file.parent.mkdir(parents=True, exist_ok=True)
                 with log_file.open("a") as f:
                     f.write(line + "\n")
 
         key = (case_name, run_name)
-        invT_by_case[key] = np.array(invT_list, float)
-        lnphi_by_case[key] = np.array(lnphi_list, float)
-        sig_ln_by_case[key] = np.array(sig_list, float)
-        meta_by_case[key] = meta_rows
-        metrics_by_case[key] = metrics_rows
+        invT_by[key] = np.array(invT_list, float)
+        lnphi_by[key] = np.array(lnphi_list, float)
+        sig_by[key] = np.array(sig_list, float)
+        meta_by[key] = meta_rows
+        metrics_by[key] = metrics_rows
 
-    return invT_by_case, lnphi_by_case, sig_ln_by_case, meta_by_case, metrics_by_case
+    return invT_by, lnphi_by, sig_by, meta_by, metrics_by
+
+
+# ── Arrhenius fit ─────────────────────────────────────────────────────────────
 
 
 def _fit_lnphi(invT, lnphi, sigma_ln=None):
+    """Weighted least-squares fit of ln(phi) = a + b/T, returns (a, b, phi_0, E_eV, band_fn)."""
     x = np.asarray(invT, float)
     y = np.asarray(lnphi, float)
-    if sigma_ln is not None:
-        s = np.asarray(sigma_ln, float)
-        w = np.where(np.isfinite(s) & (s > 0.0), 1.0 / (s * s), 1.0)
-    else:
-        w = np.ones_like(x)
+    w = (
+        1.0 / np.asarray(sigma_ln, float) ** 2
+        if sigma_ln is not None
+        else np.ones_like(x)
+    )
+    w = np.where(np.isfinite(w) & (w > 0), w, 1.0)
+
     X = np.column_stack((np.ones_like(x), x))
-    W = np.diag(w)
-    XtW = X.T @ W
-    XtWX = XtW @ X
-    XtWy = XtW @ y
-    XtWX_inv = np.linalg.pinv(XtWX)
-    beta = XtWX_inv @ XtWy
+    XtWX_inv = np.linalg.pinv(X.T @ np.diag(w) @ X)
+    beta = XtWX_inv @ (X.T @ (w * y))
     a, b = float(beta[0]), float(beta[1])
-    Phi0 = float(np.exp(a))
-    E = float(-b * kB_eV)
+
     r = y - (a + b * x)
-    n, p = X.shape
-    dof = max(n - p, 1)
-    RSS_w = float(np.sum(w * r * r))
-    s2 = RSS_w / dof
-    cov_beta = s2 * XtWX_inv
+    s2 = float(np.sum(w * r * r)) / max(len(x) - 2, 1)
+    cov = s2 * XtWX_inv
 
     def band(xq, z=1.96):
         xq = np.asarray(xq, float)
-        yhat = a + b * xq
-        v0 = np.ones_like(xq)
-        v1 = xq
-        var = (
-            cov_beta[0, 0] * v0 * v0
-            + 2.0 * cov_beta[0, 1] * v0 * v1
-            + cov_beta[1, 1] * v1 * v1
-        )
-        var = np.maximum(var, 0.0)
-        std = np.sqrt(var)
-        return yhat - z * std, yhat + z * std
+        var = cov[0, 0] + 2.0 * cov[0, 1] * xq + cov[1, 1] * xq**2
+        std = np.sqrt(np.maximum(var, 0.0))
+        return (a + b * xq) - z * std, (a + b * xq) + z * std
 
-    return a, b, Phi0, E, band
+    return a, b, float(np.exp(a)), float(-b * kB_eV), band
 
 
-def _save_inverted_points_csv(outdir, rows):
-    outdir.mkdir(parents=True, exist_ok=True)
-    import csv
+# ── CSV outputs ───────────────────────────────────────────────────────────────
 
-    csv_path = outdir / "inverted_points.csv"
-    with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(
-            f,
-            fieldnames=[
-                "case",
-                "run",
-                "T_C",
-                "T_K",
-                "invT",
-                "ln_phi",
-                "sigma_lnphi",
-                "phi",
-                "sigma_phi",
-                "J_exp",
-                "sigma_J",
-                "J_fit",
-                "err_abs",
-                "err_rel",
-            ],
-        )
+
+def _save_inverted_points_csv(rows: list) -> None:
+    path = OUTDIR / "inverted_points.csv"
+    fields = [
+        "case",
+        "run",
+        "T_C",
+        "T_K",
+        "invT",
+        "ln_phi",
+        "sigma_lnphi",
+        "phi",
+        "sigma_phi",
+        "J_exp",
+        "sigma_J",
+        "J_fit",
+        "err_abs",
+        "err_rel",
+    ]
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
-        for r in rows:
-            w.writerow(r)
+        w.writerows(rows)
     if _RANK0:
-        print(f"[saved] {csv_path}")
+        print(f"[saved] {path}")
 
 
-def _save_fitted_params_csv(outdir, fit_info):
-    outdir.mkdir(parents=True, exist_ok=True)
-    import csv
-
-    csv_path = outdir / "fitted_params.csv"
-    with open(csv_path, "w", newline="") as f:
+def _save_fitted_params_csv(fit_info: dict) -> None:
+    path = OUTDIR / "fitted_params.csv"
+    with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["case", "run", "phi0", "E_eV", "R2"])
         w.writeheader()
-        for key, v in fit_info.items():
-            if isinstance(key, tuple):
-                case_name, run_name = key
-            else:
-                case_name, run_name = key, ""
+        for (case_name, run_name), v in fit_info.items():
             w.writerow(
                 {
                     "case": case_name,
@@ -819,52 +713,44 @@ def _save_fitted_params_csv(outdir, fit_info):
                 }
             )
     if _RANK0:
-        print(f"[saved] {csv_path}")
+        print(f"[saved] {path}")
+
+
+# ── Main plotting / inversion routine ─────────────────────────────────────────
 
 
 def make_dual_overlay_lnphi(
-    cases,
-    T2K,
-    Y_FT_BY_TEMP_C,
-    D_flibe,
-    D_nickel,
-    K_S_nickel,
-    outdir: Path,
-    title_suffix="SWAP configuration",
+    cases: Dict,
+    T2K: Dict[float, float],
+    Y_FT_BY_TEMP_C: Dict[float, float],
+    D_flibe: htm.Diffusivity,
+    K_S_nickel_by_case: Dict[str, htm.Solubility],
+    title_suffix: str = "SWAP configuration",
     save_csv: bool = True,
-):
-    outdir.mkdir(parents=True, exist_ok=True)
-    pts = _collect_points_for_cases(
-        cases, T2K, Y_FT_BY_TEMP_C, allowed_case_names=list(cases.keys())
-    )
+) -> dict:
+    pts = _collect_points(cases, T2K, Y_FT_BY_TEMP_C, list(cases.keys()))
     invT_by, lnphi_by, sig_by, meta_by, metrics_by = _invert_points_with_sigma(
-        pts, D_flibe, D_nickel, K_S_nickel
+        pts, D_flibe, K_S_nickel_by_case
     )
 
-    case_names = sorted({case for (case, run) in invT_by.keys()})
-    palette = mpl.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1", "C2"])
-    bc_colors = {"swap_infinite": palette[0], "swap_transparent": palette[1]}
-
+    case_names = sorted({case for (case, _) in invT_by})
+    palette = mpl.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1"])
+    bc_colors = {name: palette[i % len(palette)] for i, name in enumerate(case_names)}
     runs_all = sorted({p.run for plist in meta_by.values() for p in plist})
     base_markers = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
     run_marker = {
         r: base_markers[i % len(base_markers)] for i, r in enumerate(runs_all)
     }
 
+    MS, CAP, ELW, MECW = 5, 5, 0.9, 0.9
     fig, ax = plt.subplots(figsize=(8, 5.2))
     fig.subplots_adjust(top=0.80, bottom=0.25)
 
-    MS = 5
-    CAP = MS
-    ELW = 0.9
-    MECW = 0.9
-
     for (case_name, run_name), invT in invT_by.items():
-        color = bc_colors.get(case_name, "C0")
+        color = bc_colors[case_name]
         lnphi = lnphi_by[(case_name, run_name)]
         sig = sig_by[(case_name, run_name)]
-        x = 1000 * invT
-        y = np.exp(lnphi)
+        x, y = 1000 * invT, np.exp(lnphi)
         ysig = np.where(np.isfinite(sig) & (sig > 0), y * sig, 0.0)
 
         ax.errorbar(
@@ -903,31 +789,27 @@ def make_dual_overlay_lnphi(
         fit_info[key] = dict(a=a, b=b, Phi0=Phi0, E=E, R2=R2, band=band)
 
         xx = np.linspace(invT.min(), invT.max(), 200)
-        xx_plot = 1000 * xx
-        yy_plot = np.exp(fit_info[key]["a"] + fit_info[key]["b"] * xx)
-        lo, hi = fit_info[key]["band"](xx)
-        c = bc_colors.get(case_name, "C0")
-
+        lo, hi = band(xx)
+        c = bc_colors[case_name]
         ax.plot(
-            xx_plot,
-            yy_plot,
+            1000 * xx,
+            np.exp(a + b * xx),
             color=c,
             lw=2,
             label=f"{case_name} — {run_name} fit",
             zorder=3.5,
         )
-        ax.plot(xx_plot, np.exp(lo), color=c, lw=1.0, ls="--", alpha=0.8)
-        ax.plot(xx_plot, np.exp(hi), color=c, lw=1.0, ls="--", alpha=0.8)
+        ax.plot(1000 * xx, np.exp(lo), color=c, lw=1.0, ls="--", alpha=0.8)
+        ax.plot(1000 * xx, np.exp(hi), color=c, lw=1.0, ls="--", alpha=0.8)
 
     ax.set_xlabel("1000 / T [1/K]")
     ax.set_yscale("log")
-    ax.set_ylabel("φ  [H·m⁻¹·s⁻¹·Pa⁻¹]")
+    ax.set_ylabel(r"$\Phi_\mathrm{FLiBe}$  [H·m⁻¹·s⁻¹·Pa⁻⁰·⁵]")
     ax.grid(True, alpha=0.3)
-    fig.suptitle(f"Pointwise inversion across BCs — {title_suffix}", y=0.98)
+    fig.suptitle(f"Pointwise inversion — {title_suffix}", y=0.98)
 
     bc_handles = [
-        Line2D([0], [0], color=bc_colors.get(case, "C0"), lw=2, label=f"{case} fits")
-        for case in case_names
+        Line2D([0], [0], color=bc_colors[c], lw=2, label=f"{c} fit") for c in case_names
     ]
     run_handles = [
         Line2D(
@@ -942,13 +824,11 @@ def make_dual_overlay_lnphi(
         )
         for r in runs_all
     ]
-    handles = bc_handles + run_handles
-
     ax.legend(
-        handles=handles,
+        handles=bc_handles + run_handles,
         loc="upper center",
         bbox_to_anchor=(0.5, 1.16),
-        ncol=max(3, len(handles)),
+        ncol=max(3, len(bc_handles) + len(run_handles)),
         frameon=True,
         framealpha=0.95,
         columnspacing=1.4,
@@ -956,7 +836,7 @@ def make_dual_overlay_lnphi(
         borderaxespad=0.6,
     )
 
-    _ensure_and_save(fig, outdir / "dual_pointwise_lnphi_invT.png")
+    _ensure_and_save(fig, OUTDIR / "dual_pointwise_lnphi_invT.png")
 
     if save_csv:
         rows = []
@@ -992,30 +872,25 @@ def make_dual_overlay_lnphi(
                         err_rel=mets[i]["err_rel"],
                     )
                 )
-        _save_inverted_points_csv(outdir, rows)
+        _save_inverted_points_csv(rows)
         _save_fitted_params_csv(
-            outdir,
             {
                 k: {"Phi0": v["Phi0"], "E": v["E"], "R2": v["R2"]}
                 for k, v in fit_info.items()
-            },
+            }
         )
+
     return fit_info
 
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     set_log_level(LogLevel.WARNING)
 
-    diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(
-        isotope="h"
-    )
-    # keep Ni diffusivity as-is
-    D_nickel = diffusivities_nickel[1]
-
     D_flibe = htm.Diffusivity(D_0=2.5e-7, E_D=0.24)
 
-    temps_C_all = [500.0, 550.0, 600.0, 650.0, 700.0]
-    T2K = {Tc: Tc + 273.15 for Tc in temps_C_all}
+    T2K = {Tc: Tc + 273.15 for Tc in [500.0, 550.0, 600.0, 650.0, 700.0]}
     Y_FT_BY_TEMP_C = {
         500.0: 0.02914,
         550.0: 0.02919,
@@ -1023,165 +898,33 @@ if __name__ == "__main__":
         650.0: 0.02930,
         700.0: 0.02936,
     }
-    # Note: run 3 is for D2, so we won't use it for fitting H data,
-    # but we keep it here for completeness and potential future use.
-    swap_infinite = {
-        500.0: {
-            "runs": {
-                "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
-                "Run 2": {"P_up": 1.31e5, "P_down": 1.99e1, "J_exp": 4.34e15},
-                "Run 3": {"P_up": 1.31e5, "P_down": 8.66, "J_exp": 1.91e15},
-            }
-        },
-        550.0: {
-            "runs": {
-                "Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15},
-                "Run 2": {"P_up": 1.31e5, "P_down": 3.89e1, "J_exp": 8.58e15},
-            }
-        },
-        600.0: {
-            "runs": {
-                "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
-                "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
-                "Run 3": {"P_up": 1.33e5, "P_down": 2.10e1, "J_exp": 4.50e15},
-            }
-        },
-        650.0: {
-            "runs": {"Run 2": {"P_up": 1.32e5, "P_down": 5.02e1, "J_exp": 1.10e16}}
-        },
-        700.0: {
-            "runs": {
-                "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
-                "Run 2": {"P_up": 1.32e5, "P_down": 4.78e1, "J_exp": 1.04e16},
-                "Run 3": {"P_up": 1.31e5, "P_down": 3.23e1, "J_exp": 7.12e15},
-            }
-        },
-    }
 
-    # swap_transparent uses Sieverts out BC (so it needs P_gb), but you want to force all to 1e-30
-    swap_transparent = {
-        500.0: {
-            "runs": {
-                "Run 1": {
-                    "P_up": 1.31e5,
-                    "P_down": 1.77e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 3.89e15,
-                },
-                "Run 2": {
-                    "P_up": 1.31e5,
-                    "P_down": 1.99e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 4.34e15,
-                },
-                "Run 3": {
-                    "P_up": 1.31e5,
-                    "P_down": 8.66,
-                    "P_gb": 1e-30,
-                    "J_exp": 1.91e15,
-                },
-            }
-        },
-        550.0: {
-            "runs": {
-                "Run 1": {
-                    "P_up": 1.31e5,
-                    "P_down": 3.21e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 7.20e15,
-                },
-                "Run 2": {
-                    "P_up": 1.31e5,
-                    "P_down": 3.89e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 8.58e15,
-                },
-            }
-        },
-        600.0: {
-            "runs": {
-                "Run 1": {
-                    "P_up": 1.33e5,
-                    "P_down": 3.57e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 7.64e15,
-                },
-                "Run 2": {
-                    "P_up": 1.32e5,
-                    "P_down": 4.62e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 1.01e16,
-                },
-                "Run 3": {
-                    "P_up": 1.33e5,
-                    "P_down": 2.10e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 4.50e15,
-                },
-            }
-        },
-        650.0: {
-            "runs": {
-                "Run 2": {
-                    "P_up": 1.32e5,
-                    "P_down": 5.02e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 1.10e16,
-                },
-            }
-        },
-        700.0: {
-            "runs": {
-                "Run 1": {
-                    "P_up": 1.32e5,
-                    "P_down": 4.07e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 9.04e15,
-                },
-                "Run 2": {
-                    "P_up": 1.32e5,
-                    "P_down": 4.78e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 1.04e16,
-                },
-                "Run 3": {
-                    "P_up": 1.31e5,
-                    "P_down": 3.230e1,
-                    "P_gb": 1e-30,
-                    "J_exp": 7.12e15,
-                },
-            }
-        },
-    }
     cases = {
         "swap_infinite": {"table": swap_infinite, "out_mode": "particle_flux_zero"},
         "swap_transparent": {"table": swap_transparent, "out_mode": "sieverts"},
     }
-    outdir = Path("exports") / "figs" / "calibration_A" / "SWAP_bundle_pure"
 
-    # ---- RUN EACH CASE WITH ITS OWN Ni SOLUBILITY (built from Ni permeability + Ni diffusivity)
-    for case_name, cfg in cases.items():
-        out_bc_rep = outbc_from_outmode(cfg["out_mode"])  # just to pick Ni set
-        K_S_nickel_case = pick_ni_solubility_for_outbc(out_bc_rep, D_nickel)
+    # Load Ni solubility for each case from the dry-run Arrhenius fits.
+    # Each case uses the BC-specific permeability (particle_flux_zero or sieverts).
+    K_S_nickel_by_case = {
+        case_name: _ni_solubility_for_bc(cfg["out_mode"])
+        for case_name, cfg in cases.items()
+    }
 
-        fit_params = make_dual_overlay_lnphi(
-            cases={case_name: cfg},  # one case at a time -> no mixing Ni params
-            T2K=T2K,
-            Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
-            D_flibe=D_flibe,
-            D_nickel=D_nickel,
-            K_S_nickel=K_S_nickel_case,  # <-- THIS is what overwrites K_solid in make_materials()
-            outdir=outdir / f"{case_name}_Ni_from_perm",
-            title_suffix=f"{case_name} (Ni solubility from Ni permeability)",
-            save_csv=True,
-        )
+    fit_params = make_dual_overlay_lnphi(
+        cases=cases,
+        T2K=T2K,
+        Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
+        D_flibe=D_flibe,
+        K_S_nickel_by_case=K_S_nickel_by_case,
+        title_suffix="swap_infinite vs swap_transparent",
+        save_csv=True,
+    )
 
-        if _RANK0:
-            print(f"\n[{case_name}] Fitted (Phi0, E, R2):")
-            for k, v in fit_params.items():
-                print(
-                    f"  {k}: Phi0={v['Phi0']:.3e}, E={v['E']:.4f} eV, R2={v['R2']:.4f}"
-                )
-
-    if (not _DEFER_SHOW) and ("agg" not in matplotlib.get_backend().lower()):
-        plt.show()
+    if _RANK0:
+        print("\nFitted parameters:")
+        for (case_name, run_name), v in fit_params.items():
+            print(
+                f"  {case_name} — {run_name}: "
+                f"Phi0={v['Phi0']:.3e}, E={v['E']:.4f} eV, R2={v['R2']:.4f}"
+            )
