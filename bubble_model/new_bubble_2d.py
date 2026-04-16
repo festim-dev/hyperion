@@ -97,6 +97,7 @@ Te_Cs = (500, 550, 600, 650, 700)
 temperatures = tuple(float(T) + 273.15 for T in Te_Cs)
 
 for temperature in temperatures:
+    # for temperature in [773.15]:
     mat_solid = F.Material(
         D_0=D_0_solid,
         E_D=E_D_solid,
@@ -184,7 +185,15 @@ for temperature in temperatures:
     flux_lg = F.SurfaceFlux(field=H, surface=liquid_gas_surface, filename=None)
     flux_sg = F.SurfaceFlux(field=H, surface=solid_gas_surface, filename=None)
     flux_down = F.SurfaceFlux(field=H, surface=bottom, filename=None)
-    my_model.exports = [flux_lg, flux_sg, flux_down]
+
+    solid = F.VTXSpeciesExport(
+        filename="H_metal_fulllengthBubble.bp", field=H, subdomain=solid_volume
+    )
+    salt = F.VTXSpeciesExport(
+        filename="H_salt_fulllengthBubble.bp", field=H, subdomain=liquid_volume
+    )
+
+    my_model.exports = [flux_lg, flux_sg, flux_down, solid, salt]
 
     my_model.initialise()
     old_N_b = p_b0 * V_b / (R_gas * temperature)
