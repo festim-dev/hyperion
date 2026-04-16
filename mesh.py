@@ -31,9 +31,7 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     gmsh.model.occ.addRectangle(0, y0, 0, x_in, y_bT - y0, tag=1)
     gmsh.model.occ.addRectangle(0, y_mB, 0, x_in, y_mT - y_mB, tag=2)
     gmsh.model.occ.addRectangle(0, y_tIn, 0, x_in, y_tOut - y_tIn, tag=3)
-    gmsh.model.occ.addRectangle(
-        x_in, y0, 0, x_out - x_in, y_tOut - y0, tag=4
-    )
+    gmsh.model.occ.addRectangle(x_in, y0, 0, x_out - x_in, y_tOut - y0, tag=4)
     gmsh.model.occ.addRectangle(0, y_mT, 0, x_in, y_fT - y_mT, tag=5)
 
     # fuse all solid parts
@@ -105,7 +103,52 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     gmsh.model.setPhysicalName(1, liquid_Ni_interface, "liquid_Ni_interface")
 
     # set CharacteristicLengthMax
+    # gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_size)
+
+    gmsh.model.setColor([(2, 5)], 190, 225, 255)
+
+    # Ni: blackish gray
+    gmsh.model.setColor([(2, 10)], 210, 210, 210)
+
+    # 1) up Ni（top_cap_Ni + top_sidewall_Ni + left_bc_top_Ni）
+    top_Ni_lines = [9, 10]
+    gmsh.model.setColor([(1, t) for t in top_Ni_lines], 0, 200, 255)  # cyan
+
+    # 2) liquid surface (liquid_surface)
+    gmsh.model.setColor([(1, 3)], 0, 128, 128)  # green
+
+    # 3) liquid-Ni interface (liquid_Ni_interface)
+    gmsh.model.setColor([(1, t) for t in curve_tags], 255, 80, 80)
+
+    # 4) down Ni（bottom_cap_Ni + bottom_sidewall_Ni + left_bc_bottom_Ni）
+    bottom_Ni_lines = [12, 13, 14]
+    gmsh.model.setColor([(1, t) for t in bottom_Ni_lines], 200, 120, 255)  # purple
+
+    # 5) outer boundary (out)
+    outer_lines = [5, 6, 7]
+    gmsh.model.setColor([(1, t) for t in outer_lines], 220, 180, 60)  # yellow
+
+    left_bc = [4, 8, 11, 15]
+
+    gmsh.model.setColor([(1, t) for t in left_bc], 120, 160, 220)
+
+    # -------------------------
+    # display settings: make the plot cleaner
+    # -------------------------
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_size)
+
+    gmsh.option.setNumber("Geometry.Points", 0)
+    gmsh.option.setNumber("Geometry.Curves", 1)
+    gmsh.option.setNumber("Geometry.Surfaces", 1)
+
+    # Mesh display
+    gmsh.option.setNumber("Mesh.Lines", 1)
+    gmsh.option.setNumber("Mesh.SurfaceEdges", 0)
+    gmsh.option.setNumber("Mesh.SurfaceFaces", 1)
+
+    # Make boundaries clearer
+    gmsh.option.setNumber("Geometry.CurveWidth", 3)
+    gmsh.option.setNumber("Geometry.PointSize", 4)
 
     gmsh.model.occ.synchronize()
 
@@ -114,8 +157,7 @@ def generate_mesh(mesh_size=2e-4, fname="mesh.msh"):
     # write to file
     gmsh.write(fname)
 
-
-#    gmsh.finalize()
+    # gmsh.finalize()
 
 
 if __name__ == "__main__":
