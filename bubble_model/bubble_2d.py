@@ -211,10 +211,10 @@ for temperature in temperatures:
     flux_down = F.SurfaceFlux(field=H, surface=bottom, filename=None)
     flux_in = F.SurfaceFlux(field=H, surface=top, filename=None)
 
-    # liquid = F.VTXSpeciesExport(filename="H_salt.bp", field=H, subdomain=liquid_volume)
-    # solid = F.VTXSpeciesExport(filename="H_metal.bp", field=H, subdomain=solid_volume)
+    liquid = F.VTXSpeciesExport(filename="H_salt.bp", field=H, subdomain=liquid_volume)
+    solid = F.VTXSpeciesExport(filename="H_metal.bp", field=H, subdomain=solid_volume)
 
-    my_model.exports = [flux_lg, flux_sg, flux_down, flux_in]  # liquid, solid]
+    my_model.exports = [flux_lg, flux_sg, flux_down, flux_in, liquid, solid]
 
     my_model.initialise()
 
