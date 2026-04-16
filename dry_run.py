@@ -79,11 +79,19 @@ all_surface_subdomains = [
 ]
 
 
-def make_materials(P_0, E_P):
+def make_materials(phi_0, E_phi):
+    """
+    Build a FESTIM material from permeability parameters.
+
+    phi_0 : permeability pre-exponential [particles / (m s Pa^0.5)]
+    E_phi : permeability activation energy [eV]
+    """
     D_0_solid = D_solid.pre_exp.magnitude
     E_D_solid = D_solid.act_energy.magnitude
 
-    K_S_solid = htm.Solubility(S_0=P_0 / D_0_solid, E_S=E_P - E_D_solid, law="sievert")
+    K_S_solid = htm.Solubility(
+        S_0=phi_0 / D_0_solid, E_S=E_phi - E_D_solid, law="sievert"
+    )
 
     mat_solid = F.Material(
         D_0=D_0_solid,
@@ -158,8 +166,10 @@ def run_one_temperature(
     return float(sum(flux.value for flux in downstream_fluxes))
 
 
+# Experimental cases: (T [C], run label, P_up [Pa], P_down [Pa], flux [H/s], flux_err [H/s])
+# flux_err converted from k=2 to k=1 (1-sigma) by dividing by 2.
 exp_cases = [
-    (T, run, pup, pdown, flux, flux_err / 2.0)  # convert k=2 -> k=1
+    (T, run, pup, pdown, flux, flux_err / 2.0)
     for T, run, pup, pdown, flux, flux_err in dry_run
 ]
 
@@ -173,7 +183,7 @@ idx2 = np.array([i for i, r in enumerate(run_labels) if r == "Run 2"], dtype=int
 
 modes = ["flux0", "conc0"]
 
-# Permeability data sources used for material parameters
+# Literature permeability data (phi_0 in mol-based units, E_phi in kJ/mol)
 manual_mats = [
     ("Lee", make_materials(mol_to_particles(4.52e-7), kj_mol_to_ev(55.3))),
     ("Yamanishi", make_materials(mol_to_particles(7.08e-7), kj_mol_to_ev(54.8))),
@@ -328,7 +338,7 @@ def bar_panel_runs(fname: str):
         markeredgecolor="red",
         markeredgewidth=1.5,
         linestyle="None",
-        label="Experiment",
+        label=r"Experiment ($1\sigma$)",
     )
 
     handles = author_handles + style_handles + [exp_handle]
