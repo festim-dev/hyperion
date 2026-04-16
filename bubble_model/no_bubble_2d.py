@@ -55,7 +55,7 @@ PENALTY = 1e5
 ATOL = 1e-10
 RTOL = 1e-8
 
-t_total = 1000
+t_total = 200
 
 c_up = 1.0
 c_down = 0.0
@@ -138,16 +138,16 @@ for temperature in temperatures:
 
     flux_down = F.SurfaceFlux(field=H, surface=bottom, filename=None)
     flux_in = F.SurfaceFlux(field=H, surface=top, filename=None)
-    my_model.exports = [flux_down, flux_in]
+    # my_model.exports = [flux_down, flux_in]
 
-    # solid = F.VTXSpeciesExport(
-    #     filename="H_metal_noBubble.bp", field=H, subdomain=solid_volume
-    # )
-    # salt = F.VTXSpeciesExport(
-    #     filename="H_salt_noBubble.bp", field=H, subdomain=liquid_volume
-    # )
+    solid = F.VTXSpeciesExport(
+        filename="H_metal_noBubble.bp", field=H, subdomain=solid_volume
+    )
+    salt = F.VTXSpeciesExport(
+        filename="H_salt_noBubble.bp", field=H, subdomain=liquid_volume
+    )
 
-    # my_model.exports = [flux_down]  # solid, salt]
+    my_model.exports = [flux_down, flux_in, solid, salt]
 
     my_model.initialise()
     my_model.run()
@@ -197,6 +197,7 @@ if RANK == 0:
 
     ax_down.set_xlabel("Time (s)")
     ax_down.set_ylabel("Downstream flux (H/s)")
+    # ax_down.set_ylim(ymin=0, ymax=14)
     ax_down.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
     fig_down.tight_layout()
     fig_down.savefig(
