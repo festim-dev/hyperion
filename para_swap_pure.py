@@ -18,7 +18,6 @@ import multiprocessing as mp
 import matplotlib as mpl
 from matplotlib.lines import Line2D
 
-
 try:
     mp.set_start_method("spawn")
 except RuntimeError:
@@ -91,6 +90,77 @@ def load_or_make_mesh(mesh_file: str, mesh_size: float, model_rank: int = 0):
     facet_tags = _read.facet_tags
     _mesh_cache[mesh_file] = (mesh, cell_tags, facet_tags)
     return _mesh_cache[mesh_file]
+
+
+def kJmol_to_eV(E_kJmol: float) -> float:
+    # 1 eV per molecule = 96.485332123... kJ/mol
+    return float(E_kJmol) / 96.485332123
+
+
+NA = 6.02214076e23
+CONVERT_MOL_TO_PARTICLE = True
+
+P0_COATED_INPUT = 1.0392367934e-07  # "no flux bc" / ideal coating
+EP_COATED_KJMOL = 45.501620
+
+P0_UNCOATED_INPUT = 9.0326719717e-07  # "no coating bc"
+EP_UNCOATED_KJMOL = 57.591963
+
+
+def _to_particle_P0(P0_in: float) -> float:
+    return float(P0_in) * NA if CONVERT_MOL_TO_PARTICLE else float(P0_in)
+
+
+NI_PERM_BY_OUTBC = {
+    "particle_flux_zero": dict(
+        P0=_to_particle_P0(P0_COATED_INPUT), EP_kJmol=EP_COATED_KJMOL
+    ),
+    "sieverts": dict(P0=_to_particle_P0(P0_UNCOATED_INPUT), EP_kJmol=EP_UNCOATED_KJMOL),
+}
+
+
+def make_ni_solubility_from_perm(
+    D_nickel: htm.Diffusivity, P0_particle: float, EP_kJmol: float
+):
+    """
+    Build a Ni solubility object consistent with:
+      - Ni diffusivity D_nickel (kept as-is)
+      - Ni permeability (Sieverts law) given by (P0, EP)
+    using S(T) = P(T) / D(T).
+    """
+    perm_ni = htm.Permeability(
+        pre_exp=float(P0_particle),
+        act_energy=kJmol_to_eV(float(EP_kJmol)),
+        law="sievert",
+    )
+
+    K_S_ni = htm.Solubility(
+        S_0=perm_ni.pre_exp / D_nickel.pre_exp,
+        E_S=perm_ni.act_energy - D_nickel.act_energy,
+        law="sievert",
+    )
+    return K_S_ni
+
+
+def pick_ni_solubility_for_outbc(
+    out_bc: dict, D_nickel: htm.Diffusivity
+) -> htm.Solubility:
+    t = (out_bc or {}).get("type", "particle_flux_zero")
+    t = str(t).lower()
+    if t not in NI_PERM_BY_OUTBC:
+        t = "particle_flux_zero"
+    prm = NI_PERM_BY_OUTBC[t]
+    return make_ni_solubility_from_perm(D_nickel, prm["P0"], prm["EP_kJmol"])
+
+
+def outbc_from_outmode(out_mode: str, P_gb_default: float = 1e-30) -> dict:
+    out_mode = (out_mode or "").lower()
+    if out_mode == "sieverts":
+        return {"type": "sieverts", "pressure": P_gb_default}
+    elif out_mode == "particle_flux_zero":
+        return {"type": "particle_flux_zero"}
+    else:
+        return {"type": "particle_flux_zero"}
 
 
 # ------------------------------ Materials & Model ------------------------------
@@ -407,7 +477,7 @@ def _collect_points_for_cases(
                         P_down=float(cond["P_down"]),
                         P_gb=float(cond.get("P_gb")) if "P_gb" in cond else None,
                         y_ft=y5,
-                        J_exp=float(cond["J_exp"]) / 2.0,
+                        J_exp=float(cond["J_exp"]),
                     )
                 )
     if not pts:
@@ -419,18 +489,18 @@ def _collect_points_for_cases(
 # --- EXP error lookup ---
 exp_error_data = {
     "swap_infinite": {
-        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
-        550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
-        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
-        650.0: {"runs": {"Run 2": 2.26e14}},
-        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
+        500.0: {"runs": {"Run 1": 2.66e14, "Run 2": 2.96e14, "Run 3": 1.33e14}},
+        550.0: {"runs": {"Run 1": 4.88e14, "Run 2": 5.81e14}},
+        600.0: {"runs": {"Run 1": 5.25e14, "Run 2": 6.84e14, "Run 3": 3.08e14}},
+        650.0: {"runs": {"Run 2": 7.43e14}},
+        700.0: {"runs": {"Run 1": 6.17e14, "Run 2": 7.08e14, "Run 3": 4.84e14}},
     },
     "swap_transparent": {
-        500.0: {"runs": {"Run 1": 8.81e13, "Run 2": 9.63e13}},
-        550.0: {"runs": {"Run 1": 1.50e14, "Run 2": 1.77e14}},
-        600.0: {"runs": {"Run 1": 1.79e14, "Run 2": 2.09e14}},
-        650.0: {"runs": {"Run 2": 2.26e14}},
-        700.0: {"runs": {"Run 1": 1.99e14, "Run 2": 2.19e14}},
+        500.0: {"runs": {"Run 1": 2.66e14, "Run 2": 2.96e14, "Run 3": 1.33e14}},
+        550.0: {"runs": {"Run 1": 4.88e14, "Run 2": 5.81e14}},
+        600.0: {"runs": {"Run 1": 5.25e14, "Run 2": 6.84e14, "Run 3": 3.08e14}},
+        650.0: {"runs": {"Run 2": 7.43e14}},
+        700.0: {"runs": {"Run 1": 6.17e14, "Run 2": 7.08e14, "Run 3": 4.84e14}},
     },
 }
 
@@ -443,13 +513,13 @@ def get_exp_error(case_name: str, temp, run_name: str = "Run 1"):
     if entry is None:
         return None
     if isinstance(entry, (int, float)):
-        val = float(entry)
+        val = float(entry) / 2.0
         return val if np.isfinite(val) and val > 0.0 else None
     if isinstance(entry, dict):
         runs = entry.get("runs")
         val = runs.get(run_name) if isinstance(runs, dict) else entry.get(run_name)
         try:
-            val = float(val)
+            val = float(val) / 2.0
         except (TypeError, ValueError):
             return None
         return val if np.isfinite(val) and val > 0.0 else None
@@ -457,7 +527,6 @@ def get_exp_error(case_name: str, temp, run_name: str = "Run 1"):
 
 
 # ------------------------------ Core: inversion with uncertainty ------------------------------
-# ----- child processes for safe solves and inversion -----
 def _invert_point_child(p_dict, D_flibe, D_nickel, K_S_nickel, q):
     tiny = np.finfo(float).tiny
 
@@ -570,17 +639,12 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
         {},
         {},
     )
-
-    # Loop over each (case, run) pair
     case_run_pairs = sorted(
-        {(p.case, p.run) for p in pts},
-        key=lambda cr: (cr[0], cr[1]),
+        {(p.case, p.run) for p in pts}, key=lambda cr: (cr[0], cr[1])
     )
 
     for case_name, run_name in case_run_pairs:
         invT_list, lnphi_list, sig_list, meta_rows, metrics_rows = [], [], [], [], []
-
-        # Select all points for this (case, run)
         for p in [pp for pp in pts if pp.case == case_name and pp.run == run_name]:
             phi_T = _phi_match_exp_for_point(p, D_flibe, D_nickel, K_S_nickel)
             tiny = np.finfo(float).tiny
@@ -607,13 +671,11 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
                 )
                 return max(float(out), tiny)
 
-            # modeled flux (at solved φ) and errors vs experiment
             J_fit = J_of_phi(phi_T)
             J_exp = max(float(p.J_exp), tiny)
             err_abs = J_fit - J_exp
             err_rel = err_abs / J_exp
 
-            # propagate σ_J -> σ_lnφ
             sigma_J = get_exp_error(p.case, p.T_C, p.run)
             sigma_lnphi = None
             if sigma_J and np.isfinite(sigma_J) and sigma_J > 0.0:
@@ -640,7 +702,6 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
             )
 
             if _RANK0:
-                # console + log summary per (case, run)
                 line = (
                     f"[{p.case} — {p.run}] T={p.T_C:.0f}°C: "
                     f"J_exp={J_exp:.3e}, J_fit={J_fit:.3e}, rel_err={err_rel * 100:.2f}%"
@@ -658,55 +719,32 @@ def _invert_points_with_sigma(pts, D_flibe, D_nickel, K_S_nickel):
         meta_by_case[key] = meta_rows
         metrics_by_case[key] = metrics_rows
 
-    return (
-        invT_by_case,
-        lnphi_by_case,
-        sig_ln_by_case,
-        meta_by_case,
-        metrics_by_case,
-    )
+    return invT_by_case, lnphi_by_case, sig_ln_by_case, meta_by_case, metrics_by_case
 
 
 def _fit_lnphi(invT, lnphi, sigma_ln=None):
-    """
-    Weighted least squares fit: lnφ = a + b * (1/T).
-    Returns (a, b, Phi0, E, band) where band(x) -> (ylo, yhi) is a
-    95% CI on the fitted mean ŷ(x) using WLS covariance.
-    """
     x = np.asarray(invT, float)
     y = np.asarray(lnphi, float)
-
-    # weights: default to 1; if sigma provided, use 1/sigma^2
     if sigma_ln is not None:
         s = np.asarray(sigma_ln, float)
         w = np.where(np.isfinite(s) & (s > 0.0), 1.0 / (s * s), 1.0)
     else:
         w = np.ones_like(x)
-
-    # design matrix and weight matrix
-    X = np.column_stack((np.ones_like(x), x))  # [1, x]
+    X = np.column_stack((np.ones_like(x), x))
     W = np.diag(w)
-
-    # beta = (X^T W X)^(-1) X^T W y
     XtW = X.T @ W
     XtWX = XtW @ X
     XtWy = XtW @ y
-    XtWX_inv = np.linalg.pinv(XtWX)  # robust inverse
+    XtWX_inv = np.linalg.pinv(XtWX)
     beta = XtWX_inv @ XtWy
     a, b = float(beta[0]), float(beta[1])
-
-    # Arrhenius parameters
     Phi0 = float(np.exp(a))
     E = float(-b * kB_eV)
-
-    # residuals and weighted RSS
     r = y - (a + b * x)
     n, p = X.shape
     dof = max(n - p, 1)
     RSS_w = float(np.sum(w * r * r))
-    s2 = RSS_w / dof  # variance estimate
-
-    # covariance of coefficients (WLS)
+    s2 = RSS_w / dof
     cov_beta = s2 * XtWX_inv
 
     def band(xq, z=1.96):
@@ -714,7 +752,6 @@ def _fit_lnphi(invT, lnphi, sigma_ln=None):
         yhat = a + b * xq
         v0 = np.ones_like(xq)
         v1 = xq
-        # var(yhat) = [v]^T cov_beta [v], with v = [1, x]
         var = (
             cov_beta[0, 0] * v0 * v0
             + 2.0 * cov_beta[0, 1] * v0 * v1
@@ -728,11 +765,6 @@ def _fit_lnphi(invT, lnphi, sigma_ln=None):
 
 
 def _save_inverted_points_csv(outdir, rows):
-    """
-    rows: list of dicts with keys:
-      case, run, T_C, T_K, invT, ln_phi, sigma_lnphi, phi, sigma_phi,
-      J_exp, sigma_J, J_fit, err_abs, err_rel
-    """
     outdir.mkdir(parents=True, exist_ok=True)
     import csv
 
@@ -765,11 +797,6 @@ def _save_inverted_points_csv(outdir, rows):
 
 
 def _save_fitted_params_csv(outdir, fit_info):
-    """
-    fit_info:
-        either dict[case] -> dict(Phi0, E, R2)
-        or     dict[(case, run)] -> dict(Phi0, E, R2)
-    """
     outdir.mkdir(parents=True, exist_ok=True)
     import csv
 
@@ -781,7 +808,7 @@ def _save_fitted_params_csv(outdir, fit_info):
             if isinstance(key, tuple):
                 case_name, run_name = key
             else:
-                case_name, run_name = key, ""  # backward compatibility
+                case_name, run_name = key, ""
             w.writerow(
                 {
                     "case": case_name,
@@ -807,8 +834,6 @@ def make_dual_overlay_lnphi(
     save_csv: bool = True,
 ):
     outdir.mkdir(parents=True, exist_ok=True)
-
-    # ---- collect & invert
     pts = _collect_points_for_cases(
         cases, T2K, Y_FT_BY_TEMP_C, allowed_case_names=list(cases.keys())
     )
@@ -816,46 +841,32 @@ def make_dual_overlay_lnphi(
         pts, D_flibe, D_nickel, K_S_nickel
     )
 
-    # ---- style maps
-    # list of unique case names
     case_names = sorted({case for (case, run) in invT_by.keys()})
-
     palette = mpl.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1", "C2"])
-    bc_colors = {
-        "swap_infinite": palette[0],
-        "swap_transparent": palette[1],
-    }
+    bc_colors = {"swap_infinite": palette[0], "swap_transparent": palette[1]}
 
-    # all run names
     runs_all = sorted({p.run for plist in meta_by.values() for p in plist})
     base_markers = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
     run_marker = {
         r: base_markers[i % len(base_markers)] for i, r in enumerate(runs_all)
     }
 
-    # ==== plotting section  ====
     fig, ax = plt.subplots(figsize=(8, 5.2))
-    # Leave extra headroom for an outside legend + suptitle
     fig.subplots_adjust(top=0.80, bottom=0.25)
 
-    # --- Plot points with error bars and run-dependent markers
     MS = 5
     CAP = MS
     ELW = 0.9
     MECW = 0.9
 
-    # Each key here is (case_name, run_name)
     for (case_name, run_name), invT in invT_by.items():
         color = bc_colors.get(case_name, "C0")
         lnphi = lnphi_by[(case_name, run_name)]
         sig = sig_by[(case_name, run_name)]
-        metas = meta_by[(case_name, run_name)]
-
-        x = 1000 * invT  # scale to 1000 / K for better readability
+        x = 1000 * invT
         y = np.exp(lnphi)
         ysig = np.where(np.isfinite(sig) & (sig > 0), y * sig, 0.0)
 
-        # vertical error bars
         ax.errorbar(
             x,
             y,
@@ -868,7 +879,6 @@ def make_dual_overlay_lnphi(
             alpha=0.9,
             zorder=2.5,
         )
-        # markers
         ax.plot(
             x,
             y,
@@ -882,7 +892,6 @@ def make_dual_overlay_lnphi(
             zorder=4.0,
         )
 
-    # --- Fit lines + dashed CI: now per (case, run)
     fit_info = {}
     for (case_name, run_name), invT in invT_by.items():
         key = (case_name, run_name)
@@ -894,12 +903,9 @@ def make_dual_overlay_lnphi(
         fit_info[key] = dict(a=a, b=b, Phi0=Phi0, E=E, R2=R2, band=band)
 
         xx = np.linspace(invT.min(), invT.max(), 200)
-        xx_plot = 1000 * xx  # scale to 1000 / K for better readability
-        yy = fit_info[key]["a"] + fit_info[key]["b"] * xx
-        yy_plot = np.exp(yy)
+        xx_plot = 1000 * xx
+        yy_plot = np.exp(fit_info[key]["a"] + fit_info[key]["b"] * xx)
         lo, hi = fit_info[key]["band"](xx)
-        plot_lo = np.exp(lo)
-        plot_hi = np.exp(hi)
         c = bc_colors.get(case_name, "C0")
 
         ax.plot(
@@ -910,29 +916,17 @@ def make_dual_overlay_lnphi(
             label=f"{case_name} — {run_name} fit",
             zorder=3.5,
         )
-        ax.plot(xx_plot, plot_lo, color=c, lw=1.0, ls="--", alpha=0.8)
-        ax.plot(xx_plot, plot_hi, color=c, lw=1.0, ls="--", alpha=0.8)
+        ax.plot(xx_plot, np.exp(lo), color=c, lw=1.0, ls="--", alpha=0.8)
+        ax.plot(xx_plot, np.exp(hi), color=c, lw=1.0, ls="--", alpha=0.8)
 
-    # --- Axes, legends, and labels
     ax.set_xlabel("1000 / T [1/K]")
     ax.set_yscale("log")
     ax.set_ylabel("φ  [H·m⁻¹·s⁻¹·Pa⁻¹]")
     ax.grid(True, alpha=0.3)
-
-    # Title placed as figure-level suptitle to avoid overlap with legend
     fig.suptitle(f"Pointwise inversion across BCs — {title_suffix}", y=0.98)
 
-    # Legend handles:
-    #  - one line style per case (color)
-    #  - one marker style per run
     bc_handles = [
-        Line2D(
-            [0],
-            [0],
-            color=bc_colors.get(case, "C0"),
-            lw=2,
-            label=f"{case} fits",
-        )
+        Line2D([0], [0], color=bc_colors.get(case, "C0"), lw=2, label=f"{case} fits")
         for case in case_names
     ]
     run_handles = [
@@ -950,7 +944,6 @@ def make_dual_overlay_lnphi(
     ]
     handles = bc_handles + run_handles
 
-    # Legend outside, above the axes (under the suptitle)
     ax.legend(
         handles=handles,
         loc="upper center",
@@ -965,7 +958,6 @@ def make_dual_overlay_lnphi(
 
     _ensure_and_save(fig, outdir / "dual_pointwise_lnphi_invT.png")
 
-    # ---- CSV exports
     if save_csv:
         rows = []
         for (case_name, run_name), invT in invT_by.items():
@@ -1008,20 +1000,18 @@ def make_dual_overlay_lnphi(
                 for k, v in fit_info.items()
             },
         )
-
     return fit_info
 
 
-# ------------------------------ Main ------------------------------
 if __name__ == "__main__":
     set_log_level(LogLevel.WARNING)
 
     diffusivities_nickel = htm.diffusivities.filter(material="nickel").filter(
         isotope="h"
     )
-    solubilities_nickel = htm.solubilities.filter(material="nickel").filter(isotope="h")
+    # keep Ni diffusivity as-is
     D_nickel = diffusivities_nickel[1]
-    K_S_nickel = solubilities_nickel[1]
+
     D_flibe = htm.Diffusivity(D_0=2.5e-7, E_D=0.24)
 
     temps_C_all = [500.0, 550.0, 600.0, 650.0, 700.0]
@@ -1033,25 +1023,27 @@ if __name__ == "__main__":
         650.0: 0.02930,
         700.0: 0.02936,
     }
-
-    # ---- SWAP input tables
+    # Note: run 3 is for D2, so we won't use it for fitting H data,
+    # but we keep it here for completeness and potential future use.
     swap_infinite = {
         500.0: {
             "runs": {
-                # "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
+                "Run 1": {"P_up": 1.31e5, "P_down": 1.77e1, "J_exp": 3.89e15},
                 "Run 2": {"P_up": 1.31e5, "P_down": 1.99e1, "J_exp": 4.34e15},
+                "Run 3": {"P_up": 1.31e5, "P_down": 8.66, "J_exp": 1.91e15},
             }
         },
         550.0: {
             "runs": {
-                # "Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15},
+                "Run 1": {"P_up": 1.31e5, "P_down": 3.21e1, "J_exp": 7.20e15},
                 "Run 2": {"P_up": 1.31e5, "P_down": 3.89e1, "J_exp": 8.58e15},
             }
         },
         600.0: {
             "runs": {
-                # "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
+                "Run 1": {"P_up": 1.33e5, "P_down": 3.57e1, "J_exp": 7.64e15},
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.62e1, "J_exp": 1.01e16},
+                "Run 3": {"P_up": 1.33e5, "P_down": 2.10e1, "J_exp": 4.50e15},
             }
         },
         650.0: {
@@ -1059,37 +1051,45 @@ if __name__ == "__main__":
         },
         700.0: {
             "runs": {
-                #         "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
+                "Run 1": {"P_up": 1.32e5, "P_down": 4.07e1, "J_exp": 9.04e15},
                 "Run 2": {"P_up": 1.32e5, "P_down": 4.78e1, "J_exp": 1.04e16},
+                "Run 3": {"P_up": 1.31e5, "P_down": 3.23e1, "J_exp": 7.12e15},
             }
         },
     }
 
+    # swap_transparent uses Sieverts out BC (so it needs P_gb), but you want to force all to 1e-30
     swap_transparent = {
         500.0: {
             "runs": {
-                # "Run 1": {
-                #     "P_up": 1.31e5,
-                #     "P_down": 1.77e1,
-                #     "P_gb": 1e-30,
-                #     "J_exp": 3.89e15,
-                # },
+                "Run 1": {
+                    "P_up": 1.31e5,
+                    "P_down": 1.77e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 3.89e15,
+                },
                 "Run 2": {
                     "P_up": 1.31e5,
                     "P_down": 1.99e1,
                     "P_gb": 1e-30,
                     "J_exp": 4.34e15,
                 },
+                "Run 3": {
+                    "P_up": 1.31e5,
+                    "P_down": 8.66,
+                    "P_gb": 1e-30,
+                    "J_exp": 1.91e15,
+                },
             }
         },
         550.0: {
             "runs": {
-                # "Run 1": {
-                #     "P_up": 1.31e5,
-                #     "P_down": 3.21e1,
-                #     "P_gb": 1e-30,
-                #     "J_exp": 7.20e15,
-                # },
+                "Run 1": {
+                    "P_up": 1.31e5,
+                    "P_down": 3.21e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 7.20e15,
+                },
                 "Run 2": {
                     "P_up": 1.31e5,
                     "P_down": 3.89e1,
@@ -1100,17 +1100,23 @@ if __name__ == "__main__":
         },
         600.0: {
             "runs": {
-                # "Run 1": {
-                #     "P_up": 1.33e5,
-                #     "P_down": 3.57e1,
-                #     "P_gb": 1e-30,
-                #     "J_exp": 7.64e15,
-                # },
+                "Run 1": {
+                    "P_up": 1.33e5,
+                    "P_down": 3.57e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 7.64e15,
+                },
                 "Run 2": {
                     "P_up": 1.32e5,
                     "P_down": 4.62e1,
                     "P_gb": 1e-30,
                     "J_exp": 1.01e16,
+                },
+                "Run 3": {
+                    "P_up": 1.33e5,
+                    "P_down": 2.10e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 4.50e15,
                 },
             }
         },
@@ -1126,43 +1132,56 @@ if __name__ == "__main__":
         },
         700.0: {
             "runs": {
-                # "Run 1": {
-                #     "P_up": 1.32e5,
-                #     "P_down": 4.07e1,
-                #     "P_gb": 1e-30,
-                #     "J_exp": 9.04e15,
-                # },
+                "Run 1": {
+                    "P_up": 1.32e5,
+                    "P_down": 4.07e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 9.04e15,
+                },
                 "Run 2": {
                     "P_up": 1.32e5,
                     "P_down": 4.78e1,
                     "P_gb": 1e-30,
                     "J_exp": 1.04e16,
                 },
+                "Run 3": {
+                    "P_up": 1.31e5,
+                    "P_down": 3.230e1,
+                    "P_gb": 1e-30,
+                    "J_exp": 7.12e15,
+                },
             }
         },
     }
-
     cases = {
         "swap_infinite": {"table": swap_infinite, "out_mode": "particle_flux_zero"},
         "swap_transparent": {"table": swap_transparent, "out_mode": "sieverts"},
     }
     outdir = Path("exports") / "figs" / "calibration_A" / "SWAP_bundle_pure"
-    fit_params = make_dual_overlay_lnphi(
-        cases=cases,
-        T2K=T2K,
-        Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
-        D_flibe=htm.Diffusivity(D_0=2.5e-7, E_D=0.24),
-        D_nickel=D_nickel,
-        K_S_nickel=K_S_nickel,
-        outdir=outdir,
-        title_suffix="SWAP configuration",
-        save_csv=True,
-    )
 
-    if _RANK0:
-        print("Fitted (Phi0, E, R2) per BC:")
-        for k, v in fit_params.items():
-            print(f"  {k}: Phi0={v['Phi0']:.3e}, E={v['E']:.4f} eV, R2={v['R2']:.4f}")
+    # ---- RUN EACH CASE WITH ITS OWN Ni SOLUBILITY (built from Ni permeability + Ni diffusivity)
+    for case_name, cfg in cases.items():
+        out_bc_rep = outbc_from_outmode(cfg["out_mode"])  # just to pick Ni set
+        K_S_nickel_case = pick_ni_solubility_for_outbc(out_bc_rep, D_nickel)
+
+        fit_params = make_dual_overlay_lnphi(
+            cases={case_name: cfg},  # one case at a time -> no mixing Ni params
+            T2K=T2K,
+            Y_FT_BY_TEMP_C=Y_FT_BY_TEMP_C,
+            D_flibe=D_flibe,
+            D_nickel=D_nickel,
+            K_S_nickel=K_S_nickel_case,  # <-- THIS is what overwrites K_solid in make_materials()
+            outdir=outdir / f"{case_name}_Ni_from_perm",
+            title_suffix=f"{case_name} (Ni solubility from Ni permeability)",
+            save_csv=True,
+        )
+
+        if _RANK0:
+            print(f"\n[{case_name}] Fitted (Phi0, E, R2):")
+            for k, v in fit_params.items():
+                print(
+                    f"  {k}: Phi0={v['Phi0']:.3e}, E={v['E']:.4f} eV, R2={v['R2']:.4f}"
+                )
 
     if (not _DEFER_SHOW) and ("agg" not in matplotlib.get_backend().lower()):
         plt.show()
