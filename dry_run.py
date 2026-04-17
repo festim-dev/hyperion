@@ -15,6 +15,7 @@ import os
 from exp_data import dry_run
 
 from matplotlib.lines import Line2D
+from matplotlib.legend_handler import HandlerErrorbar
 import morethemes as mt
 
 mt.set_theme("lumen")
@@ -228,7 +229,6 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
         y_ideal = results[(author, "flux0")][idx]
         y_uncoated = results[(author, "conc0")][idx]
 
-        # vertical line spanning the flux0-conc0 range for each temperature
         for xi, yi1, yi2 in zip(x_group, y_ideal, y_uncoated):
             ax.plot([xi, xi], [yi1, yi2], color=c, linewidth=1.6, zorder=2)
 
@@ -237,10 +237,10 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
             y_ideal,
             linestyle="None",
             marker="s",
-            markersize=10,
+            markersize=7,
             markerfacecolor="white",
             markeredgecolor=c,
-            markeredgewidth=1.8,
+            markeredgewidth=1.5,
             zorder=3,
         )
         ax.plot(
@@ -248,10 +248,10 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
             y_uncoated,
             linestyle="None",
             marker="^",
-            markersize=10,
+            markersize=7,
             markerfacecolor="white",
             markeredgecolor=c,
-            markeredgewidth=1.8,
+            markeredgewidth=1.5,
             zorder=3,
         )
 
@@ -259,14 +259,15 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
         x,
         exp_y,
         yerr=exp_yerr,
-        fmt="none",
+        fmt="o",
         color="red",
-        markersize=10,
-        capsize=4,
-        elinewidth=1.2,
-        capthick=1.2,
+        markersize=9,
+        capsize=6,
+        elinewidth=2.0,
+        capthick=2.0,
         markerfacecolor="none",
         markeredgecolor="red",
+        markeredgewidth=2.0,
         zorder=5,
     )
 
@@ -274,6 +275,8 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
     ax.set_xticklabels([f"{int(T)}" for T in temps_K], fontsize=15)
     ax.grid(True, axis="y", alpha=0.25)
     ax.tick_params(axis="both", labelsize=15)
+    ax.set_yscale("log")
+    ax.set_ylim(ymin=1e16)
     ax.yaxis.get_offset_text().set_fontsize(15)
 
 
@@ -323,22 +326,23 @@ def bar_panel_runs(fname: str):
             label="uncoated",
         ),
     ]
-    exp_handle = plt.errorbar(
+
+    exp_handle = axes[1].errorbar(
         [],
         [],
         yerr=[[1], [1]],
-        fmt="none",
+        fmt="o",
         color="red",
         ecolor="red",
-        markersize=8,
-        capsize=4,
-        elinewidth=1.2,
-        capthick=1.2,
-        markerfacecolor="white",
+        markersize=9,
+        capsize=6,
+        elinewidth=2.0,
+        capthick=2.0,
+        markerfacecolor="none",
         markeredgecolor="red",
-        markeredgewidth=1.5,
+        markeredgewidth=2.0,
         linestyle="None",
-        label=r"Experiment ($1\sigma$)",
+        label=r"Experiment",
     )
 
     handles = author_handles + style_handles + [exp_handle]
@@ -352,6 +356,7 @@ def bar_panel_runs(fname: str):
         columnspacing=2.0,
         handletextpad=0.8,
         borderpad=0.5,
+        handler_map={type(exp_handle): HandlerErrorbar(numpoints=1)},
     )
 
     fig.subplots_adjust(left=0.12, right=0.985, top=0.84, bottom=0.09, hspace=0.12)
