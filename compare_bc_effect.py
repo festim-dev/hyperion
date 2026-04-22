@@ -110,7 +110,7 @@ my_model.subdomains = [
 
 my_model.method_interface = "penalty"
 interface = F.Interface(
-    id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e27
+    id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e21
 )
 
 my_model.interfaces = [interface]
@@ -245,6 +245,40 @@ my_model.exports += [flux_out_top_cap_Ni]
 
 my_model.initialise()
 my_model.run()
+
+from dolfinx import geometry
+
+u_flibe = H.subdomain_to_post_processing_solution[fluid_volume]
+u_nickel = H.subdomain_to_post_processing_solution[solid_volume]
+
+r_iface = 0.039
+z_test = 0.026
+
+mesh_flibe = fluid_volume.submesh
+mesh_inconel = solid_volume.submesh
+
+bb_tree_flibe = geometry.bb_tree(mesh_flibe, mesh_flibe.topology.dim)
+bb_tree_inconel = geometry.bb_tree(mesh_inconel, mesh_inconel.topology.dim)
+
+
+def eval_at(u, bb_tree, mesh, r, z):
+    pt = np.array([[r, z, 0.0]])
+    candidates = geometry.compute_collisions_points(bb_tree, pt)
+    cells = geometry.compute_colliding_cells(mesh, candidates, pt)
+    return u.eval(pt, np.array([cells.links(0)[0]]))[0]
+
+
+c_l = eval_at(u_flibe, bb_tree_flibe, mesh_flibe, r_iface - 1e-4, z_test)
+c_r = eval_at(u_nickel, bb_tree_inconel, mesh_inconel, r_iface + 1e-4, z_test)
+
+K_flibe = K_liquid * np.exp(-E_K_S_liquid / (F.k_B * my_model.temperature))
+K_nickel = K_solid * np.exp(-E_K_S_solid / (F.k_B * my_model.temperature))
+
+print(f"c_flibe          = {c_l:.4e}")
+print(f"c_nickel         = {c_r:.4e}")
+print(f"c_henry/K_H      = {c_l / K_flibe:.4e}")
+print(f"(c_sievert/K_S)^2= {(c_r / K_nickel) ** 2:.4e}")
+print(f"ratio            = {(c_l / K_flibe) / (c_r / K_nickel) ** 2:.4e}")
 
 
 total_flux_glovebox = glovebox_flux.value
