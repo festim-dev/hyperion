@@ -9,6 +9,12 @@ import h_transport_materials as htm
 import matplotlib.pyplot as plt
 import numpy as np
 
+
+CASE = "UNCOATED"  # options: "IDEAL", "UNCOATED"
+
+assert CASE in ["IDEAL", "UNCOATED"], "Please set CASE to either 'IDEAL' or 'UNCOATED'"
+
+
 set_log_level(LogLevel.INFO)
 
 generate_mesh(mesh_size=2e-4)
@@ -138,11 +144,13 @@ downstream_volume_surfaces = [mid_membrane_Ni, bottom_cap_Ni, bottom_sidewall_Ni
 
 upstream_volume_surfaces = [top_cap_Ni, top_sidewall_Ni]
 
-# case 1: Outside BC as fixed concentration
-# out_surface_bc = F.FixedConcentrationBC(subdomain=out_surf, species=H, value=0.0)
-
-# case 2: Outside BC as isolated (no flux)
-out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
+match CASE:
+    case "UNCOATED":  # case 1: Outside BC as fixed concentration
+        out_surface_bc = F.FixedConcentrationBC(
+            subdomain=out_surf, species=H, value=0.0
+        )
+    case "IDEAL":  # case 2: Outside BC as isolated (no flux)
+        out_surface_bc = F.ParticleFluxBC(subdomain=out_surf, species=H, value=0.0)
 
 # case 3:
 # glovebox BC as sieverts with P = 1 pa
@@ -204,38 +212,34 @@ flux_out_liquid = CylindricalFlux(field=H, surface=liquid_surface)
 flux_out_Ds_ni_left = CylindricalFlux(field=H, surface=top_sidewall_Ni)
 flux_out_top_cap_Ni = CylindricalFlux(field=H, surface=top_cap_Ni)
 
+match CASE:
+    case "IDEAL":
+        filename_suffix = "ideal_coating"
+    case "UNCOATED":
+        filename_suffix = "uncoated"
+
 # my_model.exports = [
 #     F.VTXSpeciesExport(
 #         field=H,
-#         filename="results/out-species_solid_uncoated.bp",
+#         filename=f"results/out-species_solid_{filename_suffix}.bp",
 #         subdomain=solid_volume,
 #     ),
 #     F.VTXSpeciesExport(
 #         field=H,
-#         filename="results/out-species_fluid_uncoated.bp",
+#         filename=f"results/out-species_fluid_{filename_suffix}.bp",
 #         subdomain=fluid_volume,
 #     ),
 # ]
-my_model.exports = [
+
+my_model.exports += [
     F.VTXSpeciesExport(
         field=H,
-        filename="results/out-species_solid_ideal_coating.bp",
-        subdomain=solid_volume,
-    ),
-    F.VTXSpeciesExport(
-        field=H,
-        filename="results/out-species_fluid_ideal_coating.bp",
-        subdomain=fluid_volume,
-    ),
+        filename=f"results/out-species_vol_{vol.id}_{filename_suffix}.bp",
+        subdomain=vol,
+    )
+    for vol in my_model.volume_subdomains
 ]
-# my_model.exports = [
-#     F.VTXSpeciesExport(
-#         field=H, filename="results/out-species_solid_case_3.bp", subdomain=solid_volume
-#     ),
-#     F.VTXSpeciesExport(
-#         field=H, filename="results/out-species_fluid_case_3.bp", subdomain=fluid_volume
-#     ),
-# ]
+
 my_model.exports += downstream_fluxes
 my_model.exports += fluxes_in
 my_model.exports += [glovebox_flux]
