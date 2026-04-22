@@ -17,6 +17,7 @@ from exp_data import dry_run
 from matplotlib.lines import Line2D
 from matplotlib.legend_handler import HandlerErrorbar
 import morethemes as mt
+from drawarrow import fig_arrow
 
 mt.set_theme("lumen")
 
@@ -222,6 +223,9 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
     n_authors = len(authors)
     author_offsets = np.linspace(-8.0, 8.0, n_authors)
 
+    alpha_authors = 0.5
+    line_y_offset_factor = 0.05
+
     for i, author in enumerate(authors):
         c = author_colors[author]
         x_group = x + author_offsets[i]
@@ -230,7 +234,14 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
         y_uncoated = results[(author, "conc0")][idx]
 
         for xi, yi1, yi2 in zip(x_group, y_ideal, y_uncoated):
-            ax.plot([xi, xi], [yi1, yi2], color=c, linewidth=1.6, zorder=2)
+            ax.plot(
+                [xi, xi],
+                [yi1 * (1 - line_y_offset_factor), yi2 * (1 + line_y_offset_factor)],
+                color=c,
+                linewidth=1.6,
+                zorder=2,
+                alpha=alpha_authors,
+            )
 
         ax.plot(
             x_group,
@@ -242,6 +253,7 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
             markeredgecolor=c,
             markeredgewidth=1.5,
             zorder=3,
+            alpha=alpha_authors,
         )
         ax.plot(
             x_group,
@@ -253,15 +265,17 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
             markeredgecolor=c,
             markeredgewidth=1.5,
             zorder=3,
+            alpha=alpha_authors,
         )
 
     ax.errorbar(
         x,
         exp_y,
         yerr=exp_yerr,
-        fmt="o",
+        # fmt="o",
+        linewidth=0,
         color="red",
-        markersize=9,
+        markersize=26,
         capsize=6,
         elinewidth=2.0,
         capthick=2.0,
@@ -283,20 +297,20 @@ def _plot_one_run_on_ax(ax, run_name: str, idx: np.ndarray, author_colors: dict)
 def bar_panel_runs(fname: str):
     authors = [name for name, _ in manual_mats]
 
+    color_cycler = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     author_colors = {
-        authors[0]: "#1f77b4",
-        authors[1]: "#ff7f0e",
-        authors[2]: "#2ca02c",
+        authors[0]: color_cycler[0],
+        authors[1]: color_cycler[1],
+        authors[2]: color_cycler[2],
     }
 
-    fig, axes = plt.subplots(2, 1, figsize=(7.2, 8.2), sharex=True, sharey=True)
+    fig, ax = plt.subplots(1, 1)
 
-    axes[0].set_xlabel("Temperature [K]", fontsize=15)
-    axes[0].set_ylabel("Downstream flux [H/s]", fontsize=15)
+    ax.set_xlabel("Temperature [K]", fontsize=15)
+    ax.set_ylabel("Downstream flux [H/s]", fontsize=15)
 
-    _plot_one_run_on_ax(axes[0], "Run 1", idx1, author_colors)
-    axes[0].tick_params(axis="x", labelbottom=True)
-    axes[1].set_visible(False)
+    _plot_one_run_on_ax(ax, "Run 1", idx1, author_colors)
+    ax.tick_params(axis="x", labelbottom=True)
 
     author_handles = [
         Line2D([0], [0], color=author_colors[name], lw=2, label=name)
@@ -327,14 +341,14 @@ def bar_panel_runs(fname: str):
         ),
     ]
 
-    exp_handle = axes[1].errorbar(
+    exp_handle = ax.errorbar(
         [],
         [],
         yerr=[[1], [1]],
         fmt="o",
         color="red",
         ecolor="red",
-        markersize=9,
+        markersize=13,
         capsize=6,
         elinewidth=2.0,
         capthick=2.0,
@@ -346,24 +360,84 @@ def bar_panel_runs(fname: str):
     )
 
     handles = author_handles + style_handles + [exp_handle]
-    fig.legend(
-        handles,
-        [h.get_label() for h in handles],
-        loc="upper center",
-        ncol=3,
-        bbox_to_anchor=(0.5, 0.94),
-        frameon=True,
-        columnspacing=2.0,
-        handletextpad=0.8,
-        borderpad=0.5,
-        handler_map={type(exp_handle): HandlerErrorbar(numpoints=1)},
+
+    authors_annotation_pos = {
+        authors[0]: (873, 5e16),
+        authors[1]: (873, 22e16),
+        authors[2]: (873, 4e16),
+    }
+
+    n_authors = len(authors)
+    author_offsets = np.linspace(-8.0, 8.0, n_authors)
+
+    for handle in author_handles:
+        name = handle.get_label()
+        x_pos = authors_annotation_pos[name][0] + author_offsets[authors.index(name)]
+        y_pos = authors_annotation_pos[name][1]
+
+        plt.annotate(
+            name,
+            xy=(x_pos, y_pos),
+            fontsize=10,
+            ha="center",
+            va="bottom",
+            color=author_colors[name],
+            alpha=0.7,
+        )
+
+    plt.annotate(
+        "Experiment", xy=(930, 3e16), fontsize=10, ha="center", va="bottom", color="red"
     )
+
+    for head_pos in [(0.57, 0.55), (0.92, 0.65)]:
+        fig_arrow(
+            tail_position=(0.75, 0.35),
+            head_position=head_pos,
+            fill_head=False,
+            color="red",
+            radius=0.2,
+            alpha=0.5,
+            width=1.5,
+            head_width=5,
+            head_length=5,
+        )
+
+    plt.annotate(
+        "Ideal coating",
+        xy=(790, 3.3e16),
+        fontsize=10,
+        ha="left",
+        va="bottom",
+        color="tab:grey",
+    )
+    plt.annotate(
+        "Uncoated",
+        xy=(790, 2.2e16),
+        fontsize=10,
+        ha="left",
+        va="bottom",
+        color="tab:grey",
+    )
+
+    # fig.legend(
+    #     handles,
+    #     [h.get_label() for h in handles],
+    #     loc="upper center",
+    #     ncol=3,
+    #     bbox_to_anchor=(0.5, 0.94),
+    #     frameon=True,
+    #     columnspacing=2.0,
+    #     handletextpad=0.8,
+    #     borderpad=0.5,
+    #     handler_map={type(exp_handle): HandlerErrorbar(numpoints=1)},
+    # )
 
     fig.subplots_adjust(left=0.12, right=0.985, top=0.84, bottom=0.09, hspace=0.12)
 
     fpath = os.path.join(OUTDIR, fname)
     fig.savefig(fpath, dpi=300, bbox_inches="tight", pad_inches=0.02)
-    plt.close(fig)
+    # plt.close(fig)
+    plt.show()
 
     if RANK == 0:
         print(f"Saved: {fpath}")
