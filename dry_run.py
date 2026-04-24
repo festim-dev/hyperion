@@ -404,7 +404,7 @@ def bar_panel_runs(fname: str):
 
     plt.annotate(
         "Ideal coating",
-        xy=(790, 3.3e16),
+        xy=(785, 3.3e16),
         fontsize=10,
         ha="left",
         va="bottom",
@@ -412,7 +412,7 @@ def bar_panel_runs(fname: str):
     )
     plt.annotate(
         "Uncoated",
-        xy=(790, 2.2e16),
+        xy=(785, 2.2e16),
         fontsize=10,
         ha="left",
         va="bottom",
@@ -436,8 +436,8 @@ def bar_panel_runs(fname: str):
 
     fpath = os.path.join(OUTDIR, fname)
     fig.savefig(fpath, dpi=300, bbox_inches="tight", pad_inches=0.02)
-    # plt.close(fig)
-    plt.show()
+    plt.close(fig)
+    # plt.show()
 
     if RANK == 0:
         print(f"Saved: {fpath}")
