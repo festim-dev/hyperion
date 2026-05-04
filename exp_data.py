@@ -16,12 +16,12 @@ D_flibe = htm.Diffusivity(D_0=2.5e-7, E_D=0.24)
 # Columns: (T [C], run label, P_up [Pa], P_down [Pa], flux [H/s], flux_err [H/s])
 
 dry_run = [
-    (500.0, "Run 1", 1.30e5, 1.98e2, 4.52e16, 3.06e15),
-    (500.0, "Run 2", 1.10e5, 1.79e2, 4.08e16, 2.76e15),
-    (600.0, "Run 1", 1.30e5, 4.59e2, 1.03e17, 6.97e15),
-    (600.0, "Run 2", 1.10e5, 4.02e2, 9.19e16, 6.22e15),
-    (700.0, "Run 1", 1.30e5, 8.16e2, 1.85e17, 1.25e16),
-    (700.0, "Run 2", 1.10e5, 7.36e2, 1.65e17, 1.12e16),
+    (500.0, "Run 1", 1.30e5, 1.98e2, 4.52e16, 3.00e15),
+    (500.0, "Run 2", 1.10e5, 1.79e2, 4.08e16, 2.71e15),
+    (600.0, "Run 1", 1.30e5, 4.59e2, 1.03e17, 6.84e15),
+    (600.0, "Run 2", 1.10e5, 4.02e2, 9.19e16, 6.10e15),
+    (700.0, "Run 1", 1.30e5, 8.16e2, 1.85e17, 1.23e16),
+    (700.0, "Run 2", 1.10e5, 7.36e2, 1.65e17, 1.10e16),
 ]
 
 # ── Normal experimental flux data ────────────────────────────────────────────
@@ -99,11 +99,11 @@ normal_transparent = {
 
 # Normal flux uncertainties (k=2, 95% CI). Both cases share the same measurements.
 _normal_flux_err_base = {
-    500.0: {"runs": {"Run 1": 2.72e13, "Run 2": 4.49e13}},
-    550.0: {"runs": {"Run 1": 4.62e13, "Run 2": 5.50e13}},
-    600.0: {"runs": {"Run 1": 5.04e13, "Run 2": 7.63e13}},
-    650.0: {"runs": {"Run 1": 7.87e13, "Run 2": 6.96e13}},
-    700.0: {"runs": {"Run 1": 9.65e13, "Run 2": 9.34e13}},
+    500.0: {"runs": {"Run 1": 7.11e13, "Run 2": 8.20e13}},
+    550.0: {"runs": {"Run 1": 1.07e14, "Run 2": 1.20e14}},
+    600.0: {"runs": {"Run 1": 1.37e14, "Run 2": 1.69e14}},
+    650.0: {"runs": {"Run 1": 2.23e14, "Run 2": 2.20e14}},
+    700.0: {"runs": {"Run 1": 2.91e14, "Run 2": 2.29e14}},
 }
 
 normal_flux_err = {
@@ -176,11 +176,11 @@ swap_transparent = {
 # Nested as {T_C: {runs: {run_label: flux_err [H/s]}}}.
 
 _swap_flux_err_base = {
-    500.0: {"runs": {"Run 1": 2.66e14, "Run 2": 2.96e14, "Run 3": 1.33e14}},
-    550.0: {"runs": {"Run 1": 4.88e14, "Run 2": 5.81e14}},
-    600.0: {"runs": {"Run 1": 5.25e14, "Run 2": 6.84e14, "Run 3": 3.08e14}},
-    650.0: {"runs": {"Run 2": 7.43e14}},
-    700.0: {"runs": {"Run 1": 6.17e14, "Run 2": 7.08e14, "Run 3": 4.84e14}},
+    500.0: {"runs": {"Run 1": 2.61e14, "Run 2": 2.91e14, "Run 3": 1.30e14}},
+    550.0: {"runs": {"Run 1": 4.79e14, "Run 2": 5.70e14}},
+    600.0: {"runs": {"Run 1": 5.15e14, "Run 2": 6.71e14, "Run 3": 3.02e14}},
+    650.0: {"runs": {"Run 2": 7.29e14}},
+    700.0: {"runs": {"Run 1": 6.05e14, "Run 2": 6394e14, "Run 3": 4.75e14}},
 }
 
 swap_flux_err = {
