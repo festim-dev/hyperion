@@ -253,7 +253,7 @@ if __name__ == "__main__":
     print("Form:  phi(T) = phi_0 * exp( -E_phi / (kB*T) )   with E_phi in kJ/mol")
     for mode, run_id, phi_0, E_phi in fit_lines:
         print(
-            f"{mode:5s} | {run_id}:  phi(T) = {phi_0:.3e} * exp( -{E_phi:.3f} kJ/mol / (kB*T) )"
+            f"{mode:5s} | {run_id}:  phi(T) = {phi_0 * N_A:.3e} * exp( -{kjmol_to_ev(E_phi):.3f} eV / (kB*T) )"
         )
 
     txt_path = os.path.join(OUTDIR, "dry_run_phi_arrhenius_fits.txt")
