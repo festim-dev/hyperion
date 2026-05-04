@@ -434,7 +434,7 @@ def make_bc_marker_panel(out_pdf: Path):
         )
 
     fig.supxlabel("Temperature [K]")
-    fig.supylabel(r"Downstream flux [atom s$^{-1}$]")
+    fig.supylabel(r"Downstream flux [atom (H or D) s$^{-1}$]")
 
     handles = bc_legend_handles()
     fig.legend(
