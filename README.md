@@ -42,7 +42,7 @@ All scripts import shared data and constants from `exp_data.py`, which contains 
 | Script | Reads | Produces |
 |---|---|---|
 | `plot_comparison.py` | `jsim_jexp.csv`, `all_results_1d.csv` | 1D vs 2D vs experiment panels |
-| `plot_sidewall_metrics.py` | `percentage_metrics.csv` | Sidewall leakage / contribution figures |
+| `plot_compare_sidewall.py` | `percentage_metrics.csv` | Sidewall leakage / contribution figures |
 | `plot_perm_fits.py` | `fitted_params.csv`, `inverted_points.csv` | Arrhenius plot with literature overlay |
 
 - **t3.py** — Transient simulation for FLiBe permeability with adaptive time-stepping enabled.  
