@@ -18,8 +18,10 @@ All scripts import shared data and constants from `exp_data.py`, which contains 
 ---
 
 ### Step 2 — FLiBe permeability inversion
-Reads `dry_run_phi_arrhenius_fits.txt` for Ni parameters, then inverts
-each SWAP experimental point to find the FLiBe φ that matches the measured flux.
+| Script | Purpose |
+|---|---|
+| `para_swap_pure.py` | Reads `dry_run_phi_arrhenius_fits.txt` for Ni parameters, then inverts
+each SWAP experimental point to find the FLiBe φ that matches the measured flux. |
 
 **Output:** `results/fitted_params.csv`
 
