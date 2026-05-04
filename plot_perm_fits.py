@@ -191,7 +191,7 @@ for case_key, case in CASES.items():
         E = float(row["E_eV"].iloc[0])
         print(
             f"P-{case['label']}-{RUN_LABEL[run]} ({CASE_SYMBOL[case_key]}) = "
-            f"{phi0 / N_A:.2e} * exp(-{ev_to_kjmol(E):.2f}/(RT))"
+            f"{phi0:.2e} * exp(-{E:.3f}/(RT))"
         )
 
         T_fit = np.linspace(T.min(), T.max(), 300)
@@ -213,7 +213,7 @@ for case_key, case in CASES.items():
 
 ax.set_yscale("log")
 ax.set_xlabel("1000 / T  [1/K]")
-ax.set_ylabel(r"Permeability  [particle·m$^{-1}$·s$^{-1}$·Pa$^{-1}$]")
+ax.set_ylabel(r"Permeability  [atom(H or D)·m$^{-1}$·s$^{-1}$·Pa$^{-1}$]")
 ax.legend(loc="upper right", frameon=True, fontsize=10)
 ax.grid(True, axis="y", which="major", alpha=0.2)
 ax.grid(False, axis="x")
