@@ -26,7 +26,7 @@ from scipy.optimize import minimize
 DATA_DIR = Path(__file__).with_name("data")
 OUT_DIR = Path(__file__).with_name("results_baseline_2d")
 OUT_DIR.mkdir(exist_ok=True)
-WORKER = Path(__file__).with_name("_run_single_case.py")
+WORKER = Path(__file__).with_name("worker.py")
 ENV_PYTHON = sys.executable
 
 TS_FIT = [500, 550, 600]
