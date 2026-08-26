@@ -805,7 +805,7 @@ def make_dual_overlay_lnphi(
 
     ax.set_xlabel("1000 / T [1/K]")
     ax.set_yscale("log")
-    ax.set_ylabel(r"$\Phi_\mathrm{FLiBe}$  [H·m⁻¹·s⁻¹·Pa⁻⁰·⁵]")
+    ax.set_ylabel(r"$\Phi_\mathrm{FLiBe}$  [H·m⁻¹·s⁻¹·Pa⁻¹]")
     ax.grid(True, alpha=0.3)
     fig.suptitle(f"Pointwise inversion — {title_suffix}", y=0.98)
 
