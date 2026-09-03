@@ -187,7 +187,7 @@ def _make_model(
     out_bc: dict,
     y_ft: float,
     mesh_size: float = 2e-4,
-    penalty_term: float = 1e22,
+    penalty_term: float = 100.0,  # dimensionless Nitsche stabilisation
 ):
     y_ft_5 = float(f"{float(y_ft):.5f}")
     set_y_ft(y_ft_5)
@@ -244,10 +244,12 @@ def _make_model(
     my_model.facet_meshtags = facet_tags
     my_model.volume_meshtags = cell_tags
     my_model.subdomains = [solid_volume, fluid_volume] + all_surface_subdomains
-    my_model.method_interface = "penalty"
     my_model.interfaces = [
         F.Interface(
-            id=99, subdomains=[solid_volume, fluid_volume], penalty_term=penalty_term
+            id=99,
+            subdomains=[solid_volume, fluid_volume],
+            method="nitsche",
+            penalty_term=penalty_term,
         )
     ]
     my_model.surface_to_volume = {
