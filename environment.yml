@@ -14,7 +14,8 @@ dependencies:
   - ipykernel
   - nbconvert
   - fenics-dolfinx
-  - festim
+  - scifem
+  - adios2
   - pyvista
   - python-gmsh
   - shapely
@@ -26,6 +27,8 @@ dependencies:
   - trame-vuetify
   - nest-asyncio2
   - pip:
+      # the Nitsche interface coupling is not in a FESTIM release yet
+      - festim @ git+https://github.com/festim-dev/FESTIM.git@eed1268c5f3d81404817cf5a6f98014b5f5562fa
       - h_transport_materials
       - morethemes
       - drawarrow
