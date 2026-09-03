@@ -104,7 +104,7 @@ def make_plot(metric_key: str, ylabel: str, outfile: Path) -> None:
 
 make_plot(
     metric_key="pct_sidewall_leak",
-    ylabel="Sidewall loss / upstream flux [%]",
+    ylabel="Upstream sidewall flux ratio [%]",
     outfile=OUTDIR / "sidewall_loss.pdf",
 )
 
