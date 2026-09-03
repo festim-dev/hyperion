@@ -15,6 +15,8 @@ class CylindricalFlux(F.SurfaceFlux):
         u: dolfinx.fem.Function | ufl.indexed.Indexed,
         ds: ufl.Measure,
         entity_maps=None,
+        restriction: str | None = None,
+        subdomain_id: int | None = None,
     ):
         """Computes the value of the flux at the surface
 
@@ -24,6 +26,8 @@ class CylindricalFlux(F.SurfaceFlux):
             u: field for which the flux is computed
             ds: surface measure of the model
             entity_maps: entity maps relating parent mesh and submesh
+            restriction: side of an interior facet to evaluate the flux on
+            subdomain_id: id to index ds with, when it is not the surface's own
         """
         from scifem import assemble_scalar
 
@@ -37,9 +41,15 @@ class CylindricalFlux(F.SurfaceFlux):
         x = ufl.SpatialCoordinate(mesh)
         r = x[0]
 
+        if subdomain_id is None:
+            subdomain_id = self.surface.id
+        integrand = -self.D * r * ufl.dot(ufl.grad(u), n)
+        if restriction is not None:
+            integrand = ufl.as_ufl(integrand)(restriction)
+
         flux = assemble_scalar(
             dolfinx.fem.form(
-                -self.D * r * ufl.dot(ufl.grad(u), n) * ds(self.surface.id),
+                integrand * ds(subdomain_id),
                 entity_maps=entity_maps,
             )
         )
