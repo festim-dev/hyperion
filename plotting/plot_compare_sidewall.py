@@ -8,8 +8,8 @@ mt.set_theme("lumen")
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-CSV_FILE = Path("results") / "percentage_metrics.csv"
-OUTDIR = Path("results")
+CSV_FILE = Path(__file__).resolve().parents[1] / "results" / "percentage_metrics.csv"
+OUTDIR = Path(__file__).resolve().parents[1] / "results"
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
 # ── Style ─────────────────────────────────────────────────────────────────────
