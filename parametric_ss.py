@@ -176,7 +176,7 @@ def make_model(
         "swap_transparent",
     ],
     mesh_size: float = 2e-4,
-    penalty_term: float = 1e22,
+    penalty_term: float = 100.0,  # dimensionless Nitsche stabilisation
     P_down: float = 5.0,
     out_bc: dict | None = None,
     y_ft: float | None = None,
@@ -256,9 +256,11 @@ def make_model(
         liquid_solid_interface,
     ]
 
-    my_model.method_interface = "penalty"
     interface = F.Interface(
-        id=99, subdomains=[solid_volume, fluid_volume], penalty_term=penalty_term
+        id=99,
+        subdomains=[solid_volume, fluid_volume],
+        method="nitsche",
+        penalty_term=penalty_term,
     )
     my_model.interfaces = [interface]
 

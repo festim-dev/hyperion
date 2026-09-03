@@ -62,7 +62,7 @@ def make_model(
         "transparent",
     ],
     mesh_size: float = 2e-4,
-    penalty_term: float = 1e24,
+    penalty_term: float = 100.0,  # dimensionless Nitsche stabilisation
 ) -> Tuple[F.HydrogenTransportProblemDiscontinuous, dict[str, list[CylindricalFlux]]]:
     generate_mesh(mesh_size=mesh_size)
     model_rank = 0
@@ -116,9 +116,11 @@ def make_model(
         liquid_solid_interface,
     ]
 
-    my_model.method_interface = "penalty"
     interface = F.Interface(
-        id=99, subdomains=[solid_volume, fluid_volume], penalty_term=penalty_term
+        id=99,
+        subdomains=[solid_volume, fluid_volume],
+        method="nitsche",
+        penalty_term=penalty_term,
     )
     my_model.interfaces = [interface]
 

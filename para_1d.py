@@ -95,8 +95,8 @@ class CylindricalFlux1D(F.SurfaceFlux):
         super().__init__(field=field, surface=surface, filename=filename)
         self.radius = radius
 
-    def compute(self, u, ds, entity_maps=None):
-        super().compute(u, ds, entity_maps)
+    def compute(self, *args, **kwargs):
+        super().compute(*args, **kwargs)
         area = np.pi * self.radius**2
         self.value *= area
         if self.data:
@@ -145,7 +145,7 @@ def _make_model_1d(
     radius: float,
     K_S_nickel: htm.Solubility,
     permeability_flibe: htm.Permeability,
-    penalty_term: float = 1e20,
+    penalty_term: float = 100.0,  # dimensionless Nitsche stabilisation
 ):
     """
     1D geometry: [0, L_Ni] = Ni, [L_Ni, L_Ni + L_flibe] = FLiBe.
@@ -163,7 +163,12 @@ def _make_model_1d(
     model.subdomains = [vol_ni, vol_flibe, left_surf, right_surf]
     model.surface_to_volume = {left_surf: vol_ni, right_surf: vol_flibe}
     model.interfaces = [
-        F.Interface(id=3, subdomains=[vol_ni, vol_flibe], penalty_term=penalty_term)
+        F.Interface(
+            id=3,
+            subdomains=[vol_ni, vol_flibe],
+            method="nitsche",
+            penalty_term=penalty_term,
+        )
     ]
 
     H = F.Species("H", subdomains=model.volume_subdomains)

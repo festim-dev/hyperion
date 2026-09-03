@@ -195,7 +195,8 @@ def make_model(
     P_up: float,
     P_down: float = 5.0,
     mesh_size: float = 2e-4,
-    penalty_term: float = 1e22,
+    interface_method: str = "nitsche",
+    penalty_term: float = 100.0,  # dimensionless for Nitsche, a conductance for penalty
     out_bc: dict | None = None,
     y_ft: float | None = None,
 ) -> Tuple[F.HydrogenTransportProblemDiscontinuous, dict]:
@@ -253,10 +254,12 @@ def make_model(
     my_model.facet_meshtags = facet_tags
     my_model.volume_meshtags = cell_tags
     my_model.subdomains = [solid_volume, fluid_volume] + all_surface_subdomains
-    my_model.method_interface = "penalty"
     my_model.interfaces = [
         F.Interface(
-            id=99, subdomains=[solid_volume, fluid_volume], penalty_term=penalty_term
+            id=99,
+            subdomains=[solid_volume, fluid_volume],
+            method=interface_method,
+            penalty_term=penalty_term,
         )
     ]
     my_model.surface_to_volume = {

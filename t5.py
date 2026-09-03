@@ -106,9 +106,11 @@ my_model.subdomains = [
     liquid_solid_interface,
 ]
 
-my_model.method_interface = "penalty"
 interface = F.Interface(
-    id=99, subdomains=[solid_volume, fluid_volume], penalty_term=1e28
+    id=99,
+    subdomains=[solid_volume, fluid_volume],
+    method="nitsche",
+    penalty_term=100.0,
 )
 
 my_model.interfaces = [interface]
