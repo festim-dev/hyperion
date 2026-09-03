@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 from matplotlib.lines import Line2D
+from matplotlib.ticker import ScalarFormatter
 
 import morethemes as mt
 
@@ -122,7 +123,11 @@ def set_temperature_axis(ax, show_labels=True):
 
 
 def set_flux_axis(ax, run_name, for_bc=False):
-    ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
+    # Keep the shared power-of-ten factor above the axis, but typeset it as
+    # "x 10^16" instead of matplotlib's default "1e16".
+    fmt = ScalarFormatter(useMathText=True)
+    fmt.set_powerlimits((0, 0))
+    ax.yaxis.set_major_formatter(fmt)
     ax.yaxis.get_offset_text().set_fontsize(BASE_RC["ytick.labelsize"])
 
 
@@ -434,7 +439,7 @@ def make_bc_marker_panel(out_pdf: Path):
         )
 
     fig.supxlabel("Temperature [K]")
-    fig.supylabel(r"Downstream flux [atom (H or D) s$^{-1}$]")
+    fig.supylabel(r"Downstream flux [atom s$^{-1}$]")
 
     handles = bc_legend_handles()
     fig.legend(
