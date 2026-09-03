@@ -9,7 +9,7 @@ import morethemes as mt
 
 mt.set_theme("lumen")
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 
 # ── Inputs ────────────────────────────────────────────────────────────────────
 # All CSV outputs from run_sim_vs_exp.py, run_sim_vs_exp_1d.py live in results/
