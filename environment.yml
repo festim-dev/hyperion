@@ -14,6 +14,9 @@ dependencies:
   - ipykernel
   - nbconvert
   - fenics-dolfinx
+  # 2.2rc2 is the first release whose Nitsche interface handles a
+  # Sieverts/Henry pair; earlier ones couple the two sides through c/K
+  - festim=2.2rc2
   - scifem
   - adios2
   - pyvista
@@ -27,8 +30,6 @@ dependencies:
   - trame-vuetify
   - nest-asyncio2
   - pip:
-      # the Nitsche interface coupling is not in a FESTIM release yet
-      - festim @ git+https://github.com/festim-dev/FESTIM.git@eed1268c5f3d81404817cf5a6f98014b5f5562fa
       - h_transport_materials
       - morethemes
       - drawarrow
